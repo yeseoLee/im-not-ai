@@ -1,0 +1,941 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Humanize KR 동작 원리</title>
+<meta name="description" content="im-not-ai(humanize-korean)가 AI가 쓴 한글 문단을 측정하고, 진단하고, 고치고, 검사하는 순서를 예시 문단 하나로 따라가는 설명 페이지.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=Noto+Serif+KR:wght@500;600&display=swap">
+<style>
+/* 레이아웃: 좁은 읽기 열 사이에 그림이 끼어드는 설명 글. 그림은 열보다 조금 넓게 나갈 수 있다. */
+:root{
+  --bg:#fdfdfc; --fg:#1c2127; --fg-2:#4a5563; --muted:#7a8494; --line:#e3e6ea; --line-2:#cfd4da;
+  --panel:#f4f5f7; --panel-2:#eceef1;
+  --accent:#1f5f8b; --accent-soft:#e6eff6;
+  --del:#b4451a; --del-bg:#fbe9df; --add:#1f7a4d; --add-bg:#e3f3ea;
+  --s1:#b42318; --s2:#b7791f; --s3:#8a94a3; --s0:#b3bcc7;
+  --ok:#1f7a4d; --ok-bg:#e3f3ea; --warn:#b7791f; --warn-bg:#fbf1dc; --abort:#b42318; --abort-bg:#fbe4e1;
+  --human:#2a78d6; --ai:#eb6834;
+  --lock:#5b6475;
+  --font-body:"IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-text:"Noto Serif KR", "Apple SD Gothic Neo", serif;
+  --font-mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --col:42rem; --wide:54rem;
+  --fade:1.4s;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141719; --fg:#e7eaed; --fg-2:#b8c0c9; --muted:#8b96a3; --line:#2a3037; --line-2:#3a424b;
+    --panel:#1b1f23; --panel-2:#22272c;
+    --accent:#7fb3dc; --accent-soft:#1a2a38;
+    --del:#f0956e; --del-bg:#3a2419; --add:#7ed3a4; --add-bg:#163022;
+    --s1:#f08a7e; --s2:#e0b25a; --s3:#8b96a3; --s0:#545e6b;
+    --ok:#7ed3a4; --ok-bg:#163022; --warn:#e0b25a; --warn-bg:#352b14; --abort:#f08a7e; --abort-bg:#3a1f1c;
+    --human:#3987e5; --ai:#d95926;
+    --lock:#aab3bf;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141719; --fg:#e7eaed; --fg-2:#b8c0c9; --muted:#8b96a3; --line:#2a3037; --line-2:#3a424b;
+  --panel:#1b1f23; --panel-2:#22272c;
+  --accent:#7fb3dc; --accent-soft:#1a2a38;
+  --del:#f0956e; --del-bg:#3a2419; --add:#7ed3a4; --add-bg:#163022;
+  --s1:#f08a7e; --s2:#e0b25a; --s3:#8b96a3; --s0:#545e6b;
+  --ok:#7ed3a4; --ok-bg:#163022; --warn:#e0b25a; --warn-bg:#352b14; --abort:#f08a7e; --abort-bg:#3a1f1c;
+  --human:#3987e5; --ai:#d95926;
+  --lock:#aab3bf;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:16.5px;line-height:1.8;
+  padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:0 6rem;}
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb, var(--accent) 40%, transparent)}
+a:hover{border-bottom-color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+.col{max-width:var(--col);margin-inline:auto}
+.wide{max-width:var(--wide);margin-inline:auto}
+h1,h2,h3{text-wrap:balance;word-break:keep-all;line-height:1.3;font-weight:600;letter-spacing:-.01em}
+h1{font-size:clamp(1.9rem,4.5vw,2.7rem);margin:.4rem 0 1rem}
+h2{font-size:1.5rem;margin:3.6rem 0 1rem;padding-top:1.2rem;border-top:1px solid var(--line)}
+h3{font-size:1.12rem;margin:2rem 0 .6rem}
+p{margin:0 0 1.1rem}
+ul,ol{padding-left:1.3rem;margin:0 0 1.1rem}
+li{margin:.25rem 0}
+strong{font-weight:600}
+code,.mono{font-family:var(--font-mono);font-size:.86em}
+code{background:var(--panel);padding:.1em .35em;border-radius:4px}
+.eyebrow{font-family:var(--font-mono);font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.lede{font-size:1.1rem;color:var(--fg-2);word-break:keep-all}
+.meta{display:flex;flex-wrap:wrap;gap:.5rem 1.2rem;font-size:.85rem;color:var(--muted);margin:1.2rem 0 0;padding:0;list-style:none}
+.meta b{color:var(--fg);font-weight:600}
+.masthead{padding-top:3.2rem}
+nav.toc{margin:2rem 0 0;padding:1rem 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:.9rem}
+nav.toc ol{margin:0;padding-left:1.3rem;columns:2;column-gap:2rem}
+nav.toc li{break-inside:avoid}
+nav.toc a{border:0;color:var(--fg-2)}
+nav.toc a:hover{color:var(--accent)}
+@media (max-width:560px){nav.toc ol{columns:1}}
+.small{font-size:.86rem;color:var(--muted)}
+
+/* 그림 공통 */
+figure.fig{margin:1.8rem auto;padding:0}
+.fig-head{display:flex;gap:.8rem;align-items:baseline;margin-bottom:.6rem}
+.fig-head .n{font-family:var(--font-mono);font-size:.74rem;color:var(--muted);letter-spacing:.06em;white-space:nowrap}
+.fig-head figcaption{font-size:.92rem;color:var(--fg-2);margin:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:1.1rem 1.2rem;min-width:0}
+.ctrls{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.3rem 0 .9rem}
+button.btn{font:inherit;font-size:.84rem;font-weight:500;color:var(--fg);background:var(--bg);border:1px solid var(--line-2);border-radius:999px;padding:.3rem .85rem;cursor:pointer;line-height:1.4}
+button.btn:hover{border-color:var(--accent);color:var(--accent)}
+button.btn[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+button.btn.sm{padding:.18rem .65rem;font-size:.78rem}
+.chip{display:inline-block;font-family:var(--font-mono);font-size:.72rem;line-height:1.3;padding:.12rem .45rem;border-radius:4px;border:1px solid var(--line-2);color:var(--fg-2);background:var(--bg);white-space:nowrap;vertical-align:middle}
+.chip.s1{border-color:color-mix(in srgb,var(--s1) 50%,transparent);color:var(--s1)}
+.chip.s2{border-color:color-mix(in srgb,var(--s2) 60%,transparent);color:var(--s2)}
+.chip.ok{background:var(--ok-bg);border-color:transparent;color:var(--ok)}
+.chip.warn{background:var(--warn-bg);border-color:transparent;color:var(--warn)}
+.chip.abort{background:var(--abort-bg);border-color:transparent;color:var(--abort)}
+.chip.acc{background:var(--accent-soft);border-color:transparent;color:var(--accent)}
+.state{font-family:var(--font-mono);font-size:.74rem;color:var(--muted);letter-spacing:.04em}
+.ctrls .state.line{flex-basis:100%;min-height:1.3em} /* 상태 글이 바뀌어도 줄바꿈이 생기지 않도록 항상 한 줄을 차지한다 */
+
+/* 예시 글. 바뀌는 구간은 고정 폭 칸(slot) 안에서 투명도만 바뀐다.
+   칸의 폭과 높이는 전·후 중 큰 쪽으로 고정되므로 주변 글이 움직이지 않는다. */
+.txt{font-family:var(--font-text);font-size:1.02rem;line-height:1.95;word-break:keep-all;overflow-wrap:anywhere}
+.txt .slot{display:inline-grid;vertical-align:baseline;white-space:nowrap;border-radius:3px}
+.txt .slot>span{grid-area:1/1;justify-self:start;padding:0 .15em;border-radius:3px;transition:opacity var(--fade) ease, background-color var(--fade) ease}
+.txt .del{background:var(--del-bg);color:var(--del);text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--del) 55%,transparent);text-decoration-thickness:1.5px}
+.txt .add{background:var(--add-bg);color:var(--add);opacity:0}
+.txt.after .del{opacity:0}
+.txt.after .add{opacity:1}
+.txt.after .slot.only .del{opacity:.28;background:transparent}
+.txt .idc{font-family:var(--font-mono);font-size:.62rem;font-weight:500;color:var(--del);vertical-align:super;margin-left:.1em;letter-spacing:.02em;white-space:nowrap;transition:opacity .6s}
+.txt.after .idc{opacity:0}
+.txt .anchor{border-bottom:1.5px dotted var(--lock);padding-bottom:1px}
+.txt.show-anchor .anchor{background:var(--accent-soft);border-bottom-color:var(--accent);border-radius:2px}
+.txt.hide-marks .del{background:transparent;color:inherit;text-decoration:none}
+.txt.hide-marks .idc{visibility:hidden}
+.swatch{display:inline-block;width:.9em;height:.9em;border-radius:3px;vertical-align:-.1em;margin-right:.3em}
+.legend{display:flex;flex-wrap:wrap;gap:.4rem 1.1rem;font-size:.82rem;color:var(--fg-2);margin:.6rem 0 0}
+
+/* 첫 그림 */
+.hero .txt{font-size:1.14rem}
+.hero-foot{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-top:.8rem;flex-wrap:wrap}
+.hero .prog{height:2px;background:var(--line);border-radius:2px;flex:1 1 8rem;overflow:hidden}
+.hero .prog i{display:block;height:100%;width:0;background:var(--accent);transition:width 5.2s linear}
+.hero.after .prog i{width:100%}
+.hero .lbl{font-family:var(--font-mono);font-size:.76rem;color:var(--muted);min-width:5.5em}
+
+/* 기준 */
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:.7rem;padding:0;margin:0 0 1rem;list-style:none}
+.rules li{background:var(--panel);border-radius:8px;padding:.75rem .9rem;font-size:.9rem;line-height:1.6}
+.rules b{display:block;font-weight:600;margin-bottom:.15rem}
+.rules .k{font-family:var(--font-mono);font-size:.7rem;color:var(--muted);letter-spacing:.06em}
+
+/* 규칙 지도 */
+.pmap{display:grid;grid-template-columns:auto 1fr;gap:.45rem .9rem;align-items:center}
+.pmap .cat{font-size:.84rem;color:var(--fg-2);white-space:nowrap}
+.pmap .cat b{font-family:var(--font-mono);font-weight:500;color:var(--fg);margin-right:.4em}
+.pmap .row{display:flex;flex-wrap:wrap;gap:4px}
+.pmap .sq{width:16px;height:16px;border-radius:3px;background:var(--s0);border:0;padding:0;cursor:pointer;position:relative;transform:scale(1);transition:transform .5s cubic-bezier(.3,1.4,.5,1), opacity .4s}
+.pmap .sq.s1{background:var(--s1)} .pmap .sq.s2{background:var(--s2)} .pmap .sq.s3{background:var(--s3)}
+.pmap .sq.q::after{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--bg);opacity:.9}
+.pmap .sq:hover,.pmap .sq:focus-visible{transform:scale(1.35);z-index:1}
+.pmap .sq.hold{background:repeating-linear-gradient(45deg,var(--s0) 0 3px,transparent 3px 6px);border:1px dashed var(--s3)}
+.pre .pmap .sq{transform:scale(0);opacity:0}
+.pmap-cap{margin-top:.8rem;font-size:.88rem;min-height:1.6em;color:var(--fg-2)}
+.pmap-cap b{font-family:var(--font-mono);font-weight:500;color:var(--fg)}
+
+/* z값 막대 */
+.zrows{display:grid;gap:.55rem;font-size:.84rem}
+.zrow{display:grid;grid-template-columns:minmax(7rem,13rem) 1fr auto;gap:.6rem;align-items:center}
+.zrow .nm{font-family:var(--font-mono);font-size:.76rem;color:var(--fg-2);min-width:0}
+.zrow .nm .key{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zrow .nm small{display:block;font-family:var(--font-body);font-size:.74rem;color:var(--muted);line-height:1.4}
+.ztrack{position:relative;height:16px;background:var(--panel-2);border-radius:4px}
+.ztrack .zero,.ztrack .t1,.ztrack .t2{position:absolute;top:-3px;bottom:-3px;width:1px;background:var(--line-2)}
+.ztrack .zero{background:var(--human);width:2px}
+.ztrack .t2{background:var(--ai);width:2px}
+.ztrack .bar{position:absolute;top:3px;height:10px;border-radius:0 3px 3px 0;background:var(--fg-2);transition:width 1.6s cubic-bezier(.2,.7,.2,1), left 1.6s}
+.ztrack .bar.neg{border-radius:3px 0 0 3px}
+.ztrack .bar.hit2{background:var(--s1)} .ztrack .bar.hit1{background:var(--s2)} .ztrack .bar.dim{background:var(--s0)}
+.pre .ztrack .bar{width:0 !important}
+.zrow .val{font-family:var(--font-mono);font-size:.76rem;font-variant-numeric:tabular-nums;color:var(--fg-2);white-space:nowrap;min-width:6.5em;text-align:right}
+.zaxis{display:grid;grid-template-columns:minmax(7rem,13rem) 1fr auto;gap:.6rem;font-size:.72rem;color:var(--muted);margin-top:.2rem}
+.zaxis .ax{position:relative;height:1.2em}
+.zaxis .ax span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+.tells{display:flex;flex-wrap:wrap;gap:.4rem;margin:.4rem 0 0}
+.tells .chip{font-size:.74rem;white-space:normal;line-height:1.5}
+.tells .chip i{font-style:normal;color:var(--muted);margin-left:.35em}
+
+/* 경로 결정 */
+.ladder{display:grid;gap:.4rem;margin-top:.6rem}
+.rung{display:grid;grid-template-columns:1.6rem 1fr auto;gap:.6rem;align-items:center;padding:.5rem .7rem;border-radius:8px;border:1px solid var(--line);background:var(--bg);font-size:.86rem;transition:background .6s,border-color .6s,opacity .6s}
+.rung .q{font-family:var(--font-mono);font-size:.72rem;color:var(--muted)}
+.rung .res{font-family:var(--font-mono);font-size:.74rem;color:var(--muted);white-space:nowrap}
+.rung.no{opacity:.6}
+.rung.yes{background:var(--accent-soft);border-color:var(--accent)}
+.rung.yes .res{color:var(--accent);font-weight:500}
+.rung .cond b{font-family:var(--font-mono);font-weight:500;font-size:.8rem}
+.route-out{display:flex;align-items:flex-start;gap:.8rem;margin-top:.8rem;flex-wrap:wrap;min-height:4.5em}
+.route-out .big{font-family:var(--font-mono);font-size:1.3rem;font-weight:500;color:var(--accent);line-height:1.4}
+.samples{display:flex;flex-wrap:wrap;gap:.45rem;margin-bottom:.8rem}
+.sig{display:grid;grid-template-columns:repeat(auto-fit,minmax(8rem,1fr));gap:.5rem;margin:.6rem 0}
+.sig div{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.5rem .7rem}
+.sig .k{font-size:.72rem;color:var(--muted);font-family:var(--font-mono)}
+.sig .v{font-size:1.05rem;font-weight:600;font-variant-numeric:tabular-nums}
+.sig .v small{font-size:.74rem;font-weight:400;color:var(--muted);margin-left:.2em}
+
+/* 진단 카드 */
+.diag{font-size:.9rem}
+.diag .hd{font-family:var(--font-mono);font-size:.74rem;color:var(--muted);margin-bottom:.5rem}
+.diag ol{padding-left:1.3rem;margin:.3rem 0 .8rem}
+.diag li{margin:.45rem 0;transition:opacity .9s}
+.pre .diag li{opacity:0}
+.diag li b{font-family:var(--font-mono);font-weight:500}
+.diag .why{color:var(--fg-2)}
+.diag .rx{display:block;color:var(--add);font-size:.86rem}
+.diag .keep{background:var(--bg);border:1px dashed var(--line-2);border-radius:8px;padding:.5rem .8rem;margin-top:.6rem}
+.diag .keep b{font-family:var(--font-body)}
+
+/* 고치기 단계 보기 */
+.steps{display:grid;gap:.9rem}
+.step{display:grid;grid-template-columns:1.6rem 1fr;gap:.7rem;align-items:start;padding:.7rem .8rem;border-radius:8px;border:1px solid var(--line);background:var(--bg);transition:border-color .6s,box-shadow .6s}
+.step.cur{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.step .no{font-family:var(--font-mono);font-size:.76rem;color:var(--muted);padding-top:.35em}
+.step .tags{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.45rem}
+.step .tags .chip{opacity:.35;transition:opacity .8s}
+.step.done .tags .chip,.step.cur .tags .chip{opacity:1}
+.step .why{font-size:.82rem;color:var(--fg-2);margin-top:.3rem;opacity:.4;transition:opacity .8s}
+.step.done .why,.step.cur .why{opacity:1}
+.ledger{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem}
+@media (max-width:640px){.ledger{grid-template-columns:1fr}}
+.ledger .box{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.7rem .9rem;font-size:.84rem}
+.ledger .box h4{margin:0 0 .4rem;font-size:.8rem;font-family:var(--font-mono);font-weight:500;color:var(--muted);letter-spacing:.04em}
+.ledger .anchors{display:flex;flex-wrap:wrap;gap:.3rem}
+.ledger .anchors span{border:1px solid var(--line-2);border-radius:4px;padding:.05rem .4rem;font-size:.8rem;color:var(--muted);transition:all .6s}
+.ledger .anchors span.ok{border-color:var(--add);color:var(--add);background:var(--add-bg)}
+.ledger table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+.ledger td{padding:.18rem 0;border-bottom:1px solid var(--line)}
+.ledger td:last-child{text-align:right;font-family:var(--font-mono);font-size:.8rem;white-space:nowrap}
+
+/* 검사 */
+.gate .variant .txt{font-size:.95rem;line-height:1.85;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.8rem 1rem;margin-bottom:.9rem}
+.gate .p0k{font-family:var(--font-mono);font-size:.74rem;color:var(--muted)}
+.meter{position:relative;height:22px;background:var(--panel-2);border-radius:5px;margin:1.6rem 0 1.6rem}
+.meter .seg{position:absolute;top:0;bottom:0}
+.meter .seg.ok{left:0;width:50%;background:color-mix(in srgb,var(--ok) 14%,transparent);border-radius:5px 0 0 5px}
+.meter .seg.warn{left:50%;width:33.33%;background:color-mix(in srgb,var(--warn) 18%,transparent)}
+.meter .seg.abort{left:83.33%;width:16.67%;background:color-mix(in srgb,var(--abort) 16%,transparent);border-radius:0 5px 5px 0}
+.meter .tick{position:absolute;top:100%;transform:translateX(-50%);font-family:var(--font-mono);font-size:.7rem;color:var(--muted);margin-top:3px;white-space:nowrap}
+.meter .fill{position:absolute;left:0;top:5px;height:12px;border-radius:0 3px 3px 0;background:var(--fg-2);transition:width 1.8s cubic-bezier(.2,.7,.2,1),background .6s}
+.meter .fill.ok{background:var(--ok)} .meter .fill.warn{background:var(--warn)} .meter .fill.abort{background:var(--abort)}
+.pre .meter .fill{width:0 !important}
+.meter .cur{position:absolute;top:-1.5em;transform:translateX(-50%);font-family:var(--font-mono);font-size:.78rem;font-weight:500;transition:left 1.8s cubic-bezier(.2,.7,.2,1);white-space:nowrap}
+.axes{display:grid;gap:.45rem;font-size:.86rem;margin-top:.5rem}
+.axis{display:grid;grid-template-columns:6.5rem 1fr auto;gap:.6rem;align-items:center;padding:.4rem .6rem;border-radius:6px;background:var(--bg);border:1px solid var(--line)}
+.axis .k{font-family:var(--font-mono);font-size:.74rem;color:var(--muted)}
+.axis .v{font-variant-numeric:tabular-nums;min-width:0}
+.axis .v b{font-family:var(--font-mono);font-weight:500;font-size:.82rem}
+.verdict{display:flex;align-items:center;gap:.7rem;margin-top:.9rem;flex-wrap:wrap}
+.verdict .exit{font-family:var(--font-mono);font-size:.78rem;color:var(--muted)}
+@media (max-width:520px){.axis{grid-template-columns:5rem 1fr}.axis .chip{grid-column:2}}
+
+/* 마무리 AI */
+.fin{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}
+@media (max-width:640px){.fin{grid-template-columns:1fr}}
+.fin .box{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.7rem .9rem;font-size:.86rem}
+.fin h4{margin:0 0 .4rem;font-size:.8rem;font-family:var(--font-mono);font-weight:500;color:var(--muted)}
+.fin ul{list-style:none;padding:0;margin:0}
+.fin li{padding-left:1.4em;position:relative;margin:.2rem 0}
+.fin li::before{content:"";position:absolute;left:.1em;top:.55em;width:.7em;height:.7em;border-radius:50%;border:1.5px solid var(--line-2);transition:background .6s,border-color .6s}
+.fin li.on::before{background:var(--add);border-color:var(--add)}
+.pre .fin li.on::before{background:transparent;border-color:var(--line-2)}
+.fin .vs{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:.5rem}
+.fin .vs span{border-radius:6px;padding:.3rem .6rem;font-size:.8rem;border:1px solid var(--line)}
+.fin .vs .no{text-decoration:line-through;color:var(--muted)}
+.fin .vs .yes{border-color:var(--add);color:var(--add);background:var(--add-bg)}
+
+/* 비용 막대 */
+.bars{display:grid;gap:.6rem;font-size:.86rem}
+.brow{display:grid;grid-template-columns:minmax(9rem,13rem) 1fr;gap:.8rem;align-items:center}
+.brow .lab{color:var(--fg-2)}
+.brow .lab small{display:block;color:var(--muted);font-size:.76rem}
+.btrack{height:18px;background:var(--panel-2);border-radius:4px;position:relative}
+.btrack .b{position:absolute;left:0;top:0;height:100%;border-radius:0 4px 4px 0;background:var(--accent);transition:width 1.8s cubic-bezier(.2,.7,.2,1)}
+.btrack .n{position:absolute;left:calc(var(--w) + .5rem);top:50%;transform:translateY(-50%);font-family:var(--font-mono);font-size:.76rem;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--fg-2);transition:left 1.8s cubic-bezier(.2,.7,.2,1)}
+.pre .btrack .b{width:0 !important}
+.pre .btrack .n{left:.5rem}
+.calls{display:grid;gap:.5rem;margin-top:1rem;font-size:.86rem}
+.calls .r{display:grid;grid-template-columns:5.5rem 1fr;gap:.8rem;align-items:center}
+.calls .r b{font-family:var(--font-mono);font-weight:500}
+.calls .dots{display:flex;gap:.35rem;flex-wrap:wrap;align-items:center}
+.calls .d{width:1.9rem;height:1.9rem;border-radius:50%;display:grid;place-items:center;font-family:var(--font-mono);font-size:.62rem;color:#fff;background:var(--accent)}
+.calls .d.op{background:transparent;border:1.5px dashed var(--line-2);color:var(--muted)}
+.calls .d.py{background:var(--fg-2)}
+.calls .r small{color:var(--muted);margin-left:.4rem}
+
+/* 배수 막대 (로그 눈금) */
+.ratio{font-size:.84rem}
+.rrow{display:grid;grid-template-columns:minmax(8rem,12rem) 1fr;gap:.8rem;align-items:center;margin:.45rem 0}
+.rrow .lab b{font-family:var(--font-mono);font-weight:500;margin-right:.3em}
+.rrow .lab small{display:block;color:var(--muted);font-size:.74rem}
+.rtrack{position:relative;height:18px;background:var(--panel-2);border-radius:4px}
+.rtrack .one{position:absolute;top:-3px;bottom:-3px;width:1.5px;background:var(--fg-2);left:var(--one)}
+.rtrack .b{position:absolute;top:3px;height:12px;transition:width 1.8s cubic-bezier(.2,.7,.2,1),left 1.8s}
+.rtrack .b.ai{background:var(--ai);border-radius:0 3px 3px 0}
+.rtrack .b.hu{background:var(--human);border-radius:3px 0 0 3px}
+.rtrack .n{position:absolute;top:50%;transform:translateY(-50%);font-family:var(--font-mono);font-size:.74rem;white-space:nowrap;color:var(--fg-2)}
+.pre .rtrack .b{width:0 !important;left:var(--one) !important}
+.raxis{display:grid;grid-template-columns:minmax(8rem,12rem) 1fr;gap:.8rem;font-size:.7rem;color:var(--muted)}
+.raxis .ax{position:relative;height:1.3em}
+.raxis .ax span{position:absolute;transform:translateX(-50%)}
+
+/* 결과 파일 */
+.tree{font-family:var(--font-mono);font-size:.8rem;line-height:1.75;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.8rem 1rem;overflow-x:auto}
+.tree div{white-space:nowrap;transition:opacity .5s}
+.tree .off{opacity:.25}
+.tree .llm{color:var(--accent)}
+.tree .py{color:var(--fg-2)}
+.tree .cm{color:var(--muted);margin-left:1.2em;font-family:var(--font-body);font-size:.78rem}
+table.plain{border-collapse:collapse;width:100%;font-size:.88rem;margin:.6rem 0 1.2rem}
+table.plain th,table.plain td{text-align:left;padding:.45rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+table.plain th{font-weight:600;color:var(--fg-2);font-size:.8rem}
+.twrap{overflow-x:auto}
+
+footer{margin-top:4rem;padding-top:1.2rem;border-top:1px solid var(--line);font-size:.86rem;color:var(--muted)}
+
+@media (prefers-reduced-motion: reduce){
+  *{transition:none !important;animation:none !important}
+}
+</style>
+</head>
+<body>
+
+<header class="col masthead">
+  <div class="eyebrow">im-not-ai · humanize-korean v2.3.2 · 동작 원리</div>
+  <h1>AI가 쓴 한글, 어떻게 사람 글처럼 고치나</h1>
+  <p class="lede">im-not-ai가 AI 글을 고치는 순서를 예시 문단 하나로 보여준다. 측정, 진단, 고치기, 검사의 네 단계를 차례로 따라간다. 규칙은 하나다. 글의 내용은 그대로 두고 말투와 표현만 바꾼다.</p>
+  <ul class="meta">
+    <li>규칙 <b>10개 묶음 · 85가지</b></li>
+    <li>AI 호출 <b>light 1회 · standard 2회 · heavy 3회 이상</b></li>
+    <li>검사 프로그램 <b>5항목 (AI 호출 없음)</b></li>
+  </ul>
+  <nav class="toc" aria-label="목차">
+    <ol>
+      <li><a href="#s-promise">윤문 기준</a></li>
+      <li><a href="#s-map">AI 티 85가지 목록</a></li>
+      <li><a href="#s-shim">1단계: 글을 측정한다</a></li>
+      <li><a href="#s-diag">2단계: 가장 큰 문제를 찾는다</a></li>
+      <li><a href="#s-rewrite">3단계: 표시한 자리만 고친다</a></li>
+      <li><a href="#s-gate">4단계: 고친 글을 검사한다</a></li>
+      <li><a href="#s-final">heavy 경로의 추가 검사</a></li>
+      <li><a href="#s-cost">AI 호출 횟수와 비용</a></li>
+      <li><a href="#s-evidence">수정 근거와 포함 범위</a></li>
+      <li><a href="#s-files">결과 파일 목록</a></li>
+    </ol>
+  </nav>
+</header>
+
+<main>
+
+<section class="col">
+  <figure class="fig wide">
+    <div class="fig-head"><span class="n">그림 0</span><figcaption>예시 문단의 마지막 문장. 주황색은 AI 티로 잡힌 부분(위 작은 글씨는 규칙 번호), 초록색은 대신 넣은 표현. 점선 밑줄은 끝까지 남겨야 하는 핵심 낱말.</figcaption></div>
+    <div class="panel hero" id="hero">
+      <div class="txt show-anchor" id="hero-txt"></div>
+      <div class="hero-foot">
+        <span class="lbl" id="hero-lbl">AI 초안</span>
+        <div class="prog"><i></i></div>
+        <button class="btn sm" id="hero-toggle" type="button">일시정지</button>
+      </div>
+    </div>
+  </figure>
+  <p>바뀐 곳은 네 군데다. 첫째, 문장 앞의 <code>결론적으로</code>를 지웠다. 둘째, 영어 <em>have</em>를 그대로 옮긴 <code>가지고 있다</code>를 <code>있다</code>로 줄였다. 셋째, <code>~되기 위해서는</code>을 <code>~하려면</code>으로 줄였다. 넷째, 뜻이 없는 <code>시사하는 바가 크다</code>를 지웠다. 바뀌지 않은 곳은 주장이다. 생성형 AI, 효율성, 잠재력, 기술적 준비, 문화적 준비라는 낱말은 그대로 있고, "함께 이루어져야 한다"는 요구도 그대로다.</p>
+  <p>아래부터는 위 구분이 어떻게 지켜지는지 단계별로 보여준다. 예시로 쓴 361자 문단은 저장소에 있는 실제 프로그램 두 개(측정 프로그램 <code>prepare_monolith_input.py</code>, 검사 프로그램 <code>verify_gates.py</code>)에 넣어 숫자를 얻었다. 고친 글과 진단문은 규칙집을 따라 사람이 직접 썼다. AI를 부르는 단계는 따로 표시했다.</p>
+</section>
+
+<section class="col" id="s-promise">
+  <h2>윤문 기준</h2>
+  <p>im-not-ai가 하는 일은 "AI 티 지우기"가 아니라 "내용을 그대로 둔 채 글 다듬기"다. AI 티는 그 범위 안에서만 지운다. 저장소의 CLAUDE.md는 기준을 여섯 가지로 적어 두었다.</p>
+  <ul class="rules">
+    <li><span class="k">#1</span><b>내용 보존</b>사실, 주장, 숫자, 이름, 인용문은 한 글자도 바꾸지 않는다.</li>
+    <li><span class="k">#2</span><b>표시한 곳만 수정</b>규칙에 걸린 자리만 고친다. 규칙에 걸리지 않은 자리는 손대지 않는다.</li>
+    <li><span class="k">#3</span><b>글 종류 유지</b>신문 칼럼을 소설처럼, 보고서를 수필처럼 바꾸지 않는다.</li>
+    <li><span class="k">#4</span><b>과한 수정 금지</b>글자의 30%가 넘게 바뀌면 경고, 50%가 넘게 바뀌면 중단.</li>
+    <li><span class="k">#5</span><b>말투 유지</b>딱딱한 글은 딱딱하게, 말하듯 쓴 글은 말하듯이. '-했-'을 '-하였-'로 더 딱딱하게 바꾸지도 않는다.</li>
+    <li><span class="k">#6</span><b>새 AI 티 금지</b>원래 없던 틀에 박힌 표현("기록적인 성과", "~로 평가된다")을 새로 넣지 않는다.</li>
+  </ul>
+  <p>기준 #2와 #6은 같은 문장을 양쪽에서 지킨다. #2는 "표시 없는 자리는 손대지 마라", #6은 "표시한 자리에도 새 티를 넣지 마라"다. 예시 문단에 두 가지 표시를 겹쳐 보면 아래와 같다.</p>
+
+  <figure class="fig wide">
+    <div class="fig-head"><span class="n">그림 1</span><figcaption>같은 문단에 두 가지 표시를 겹친 모습. 고칠 자리(AI 티)와 반드시 남길 낱말(핵심 낱말)은 서로 겹치지 않는다.</figcaption></div>
+    <div class="panel">
+      <div class="ctrls" role="group" aria-label="표시 선택">
+        <button class="btn" type="button" data-layer="marks" aria-pressed="true">고칠 자리 (AI 티)</button>
+        <button class="btn" type="button" data-layer="anchor" aria-pressed="false">남길 낱말 (핵심 낱말)</button>
+        <button class="btn" type="button" data-layer="both" aria-pressed="false">둘 다</button>
+      </div>
+      <div class="txt" id="layers-txt"></div>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--del-bg);border:1px solid var(--del)"></i>규칙에 걸린 부분과 규칙 번호</span>
+        <span><i class="swatch" style="background:var(--accent-soft);border-bottom:2px dotted var(--accent)"></i>핵심 낱말 16개 (주어·목적어 자리의 중요한 명사)</span>
+      </div>
+    </div>
+  </figure>
+  <p class="small">예시 문단에는 숫자, 날짜, 따옴표 인용이 없다. 있었다면 처음부터 고칠 대상에서 빠진다. 고치지 않는 목록: 사람·회사 이름, 숫자와 단위, 누가 말했는지 적힌 따옴표 인용, 법 조문, LLM·API 같은 영어 약자.</p>
+</section>
+
+<section class="col" id="s-map">
+  <h2>AI 티 85가지 목록</h2>
+  <p>AI 티를 찾는 기준은 <code>ai-tell-taxonomy.md</code> 파일 하나다. 번역한 티가 나는 말투부터 글꾸밈 남용까지 10개 묶음 아래 85가지 규칙이 있다(사용 중 84개, 보류 1개). 규칙마다 심각도가 붙어 있다. S1은 한 번만 나와도 AI가 쓴 글로 보이는 규칙이라 무조건 고친다. S2는 세 번 이상 반복될 때 고친다. S3는 다른 규칙과 함께 나타날 때만 고친다.</p>
+  <figure class="fig wide">
+    <div class="fig-head"><span class="n">그림 2</span><figcaption>묶음별 규칙 수와 심각도. 가운데 점이 있는 칸은 글 고치는 AI가 읽는 짧은 규칙집(quick-rules, 54개)에 들어간 규칙. 칸에 마우스를 올리면 규칙 이름이 나온다.</figcaption></div>
+    <div class="panel" data-anim>
+      <div class="pmap" id="pmap"></div>
+      <div class="pmap-cap" id="pmap-cap">칸을 가리키면 규칙 이름이 여기에 나온다.</div>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--s1)"></i>S1 한 번만 나와도 고침</span>
+        <span><i class="swatch" style="background:var(--s2)"></i>S2 세 번 이상이면 고침</span>
+        <span><i class="swatch" style="background:var(--s3)"></i>S3 다른 규칙과 겹칠 때 고침</span>
+        <span><i class="swatch" style="background:var(--s0)"></i>묶음의 기본 심각도를 따름</span>
+        <span><i class="swatch" style="border:1px dashed var(--s3)"></i>보류 중</span>
+      </div>
+    </div>
+  </figure>
+  <p>같은 파일에서 짧은 규칙집 두 개가 자동으로 만들어진다. 진단 AI가 읽는 <code>diagnosis-rules.md</code>는 85개 규칙의 번호, 뜻, 찾는 조건만 모은 목록이다. 글 고치는 AI가 읽는 <code>quick-rules.md</code>는 고치는 방법까지 한 줄로 줄인 54개짜리 목록이다. 두 파일을 손으로 고치면 자동 검사(CI)가 막는다. 원본과 어긋나면 진단 AI가 적은 규칙 번호를 글 고치는 AI가 못 알아듣기 때문이다.</p>
+</section>
+
+<section class="col" id="s-shim">
+  <h2>1단계: 글을 측정한다 (프로그램)</h2>
+  <p>AI를 부르기 전에 파이썬 프로그램 하나가 글을 먼저 읽는다. <code>prepare_monolith_input.py</code>는 두 가지 일을 한다. 첫째, 글을 깨끗이 한다. 보이지 않는 특수 문자를 지우고 한글 표기를 통일한다. 둘째, 글을 숫자로 측정해 점수표를 만들고, 점수표를 원문 앞에 붙인 파일을 만든다. 글 고치는 AI는 점수표가 붙은 파일 하나만 읽으면 된다.</p>
+  <p>측정 항목 중 쉼표 항목은 한국어 AI 글 판별 벤치마크(KatFish)에서 AI와 사람 사이의 높은 편차를 보여준 항목이다. 글 종류별로 사람 평균과 AI 평균 두 값이 있고, 두 값 사이 거리의 절반을 한 칸으로 삼아 z값을 계산한다. z값 0은 사람 평균, z값 +2는 AI 평균이다.</p>
+
+  <figure class="fig wide">
+    <div class="fig-head"><span class="n">그림 3</span><figcaption>예시 문단(글 종류: 칼럼)의 측정 결과. 파란 선이 사람 평균, 주황 선이 AI 평균. z값이 +1을 넘으면 S2 신호, +2를 넘으면 S1 신호로 표시한다.</figcaption></div>
+    <div class="panel" data-anim>
+      <div class="zrows" id="zrows"></div>
+      <div class="zaxis"><span></span><div class="ax" id="zaxis"></div><span></span></div>
+      <h3 style="margin-top:1.4rem">개수 세기 항목 (평균표 없이도 믿을 수 있는 정수 값)</h3>
+      <div class="tells" id="tells"></div>
+      <p class="small" style="margin:.8rem 0 0">어휘 다양성(lexical_diversity)은 높을수록 사람 글에 가깝다. 점수표에는 적지만 고칠 대상(S1 후보)에서는 뺀다.</p>
+    </div>
+  </figure>
+
+  <h3>점수가 경로를 정한다: route_hint</h3>
+  <p>측정 프로그램은 점수로 <code>route_hint</code>(추천 경로)를 계산한다. 글 상태에 따라 AI 호출 횟수가 정해지는 구조다. 규칙은 네 줄이고 모두 숫자로 판정한다. 사용자가 "정밀 모드"나 "가볍게"라고 말하면 사용자 말이 추천 경로보다 우선한다.</p>
+
+  <figure class="fig wide">
+    <div class="fig-head"><span class="n">그림 4</span><figcaption>경로 결정 순서. 실제 글 네 개를 측정 프로그램에 넣은 결과이며, 글을 바꾸면 어느 줄에서 멈추는지 달라진다.</figcaption></div>
+    <div class="panel">
+      <div class="samples" id="samples" role="group" aria-label="글 선택"></div>
+      <div class="sig" id="sig"></div>
+      <div class="ladder" id="ladder"></div>
+      <div class="route-out"><span class="state">route_hint</span><span class="big" id="route-big">standard</span><span class="small" id="route-reason"></span></div>
+    </div>
+  </figure>
+  <p>heavy 경로는 일부러 잘 나오지 않게 만들었다. 쉼표 항목은 글쓴이 개인 습관 차이가 커서 단독 증거로 쓰지 않는다. risk_band high는 서로 다른 종류의 신호 두 개 이상이 동시에 울릴 때만 매긴다. 그래서 틀에 박힌 표현을 잔뜩 넣은 세 번째 글도 standard에 머문다. 이유는 비용이다. 진단 한 번이면 충분한 글을 진단 한 번으로 끝내는 편이 싸다. 결과 등급이 C나 D로 나오면 사용자가 heavy로 다시 돌릴 수 있다.</p>
+</section>
+
+<section class="col" id="s-diag">
+  <h2>2단계: 가장 큰 문제를 찾는다 (AI 호출 1회)</h2>
+  <p>standard와 heavy 경로는 글을 고치기 전에 진단 AI(<code>humanize-diagnostician</code>)를 한 번 부른다. 진단 AI는 글을 고치지 않는다. 글 전체를 읽고 "AI처럼 보이게 만드는 가장 큰 문제 3~6개"를 골라 <code>02_diagnosis.md</code>에 적는다.</p>
+  <p>진단을 따로 두는 이유는 두 가지다. 첫째, 효과다. 같은 엔진을 쓰는 웹앱에서 측정했을 때, 진단 없이 고치기만 시키면 잘 쓰인 AI 글은 거의 바뀌지 않았다(바뀐 글자 0.5%). AI가 자기가 읽은 글을 바로 고치면 대칭 문장, 리듬, 격언 같은 말투 같은 구조 문제를 보지 못한다. 진단을 앞에 붙이자 바뀐 글자가 11%로 올라, 모든 단계를 다 돌린 결과와 같아졌다. 둘째, 안정성이다. 문제 구간을 하나하나 세는 옛 방식은 같은 글에서 0개부터 18개까지 결과가 흔들렸다. "어느 규칙이 가장 큰 문제인가"를 고르는 방식은 결과가 안정적이다.</p>
+
+  <figure class="fig wide">
+    <div class="fig-head"><span class="n">그림 5</span><figcaption>예시 문단의 02_diagnosis.md. 프로그램이 센 숫자는 "측정 근거"로 그대로 가져오고, 프로그램이 못 세는 구조 문제만 진단 AI가 보탠다.</figcaption></div>
+    <div class="panel diag" data-anim>
+      <div class="hd"># 진단 — 2026-11-05-001-demo</div>
+      <p style="margin:.2rem 0"><strong>글 종류·말투</strong> 칼럼 · '~한다'체. 고칠 때 같은 말투를 유지한다.</p>
+      <p style="margin:.6rem 0 .2rem"><strong>가장 큰 문제 (고치는 순서)</strong></p>
+      <ol>
+        <li><b>D-1 · D-2</b> 마무리 상투어 <span class="why">"결론적으로", "따라서", "시사하는 바가 크다"가 여섯 문장에 세 번. 측정 근거: conclusion_pivot_count 2.</span><span class="rx">→ 접속사는 지우고, 뜻 없는 마무리는 문장을 그 자리에서 끝낸다.</span></li>
+        <li><b>A-3 · A-7 · A-9 · A-19</b> 번역 말투 <span class="why">"에 있어서", "가지고 있다", "에 의해 주도되는", "문화와의". 측정 근거: by_passive_count 1, 나머지는 규칙집의 찾는 조건에 직접 맞음.</span><span class="rx">→ 조사로 바로 잇고, 행동하는 쪽을 주어로 세우고, 겹친 조사는 푼다.</span></li>
+        <li><b>C-11 · E-5</b> 연결어미 뒤 쉼표, 긴 쉼표 간격 <span class="why">"있으며," 2회, "있지만," 1회. 측정 근거: comma_segment_length z +2.46 (S1 신호).</span><span class="rx">→ 새 쉼표를 만들지 않는다. 쉼표 간격은 4단계 검사 P1이 다시 잰다.</span></li>
+        <li><b>D-8 · A-21</b> 틀에 박힌 문장꼴 <span class="why">"중요한 것은 ~이다", "단순한 X를 넘어". 측정 근거: 측정 프로그램의 D-8 개수 1.</span><span class="rx">→ 주어와 서술어를 바로 잇고, "X만이 아니라 Y"로 푼다.</span></li>
+        <li><b>A-10 · A-20 · A-15</b> "할 수 있다" 반복, "~되고 있다", 뜻이 넓은 동사 <span class="why">"할 수 있다" 4회, "가속화되고 있다", "변화를 가져오고 있다".</span><span class="rx">→ 단정으로 바꾸지 않는다. 꾸밈말 자리의 2건만 지우고 서술어 자리의 2건은 둔다.</span></li>
+      </ol>
+      <div class="keep"><b>남길 것</b> "~할 수 있다"(서술어 자리 2건), "~할 필요가 있다", "~이루어져야 한다"는 글쓴이의 판단 세기이므로 그대로 둔다. "생성형 AI"는 고유 표기. '~한다'체 유지.</div>
+    </div>
+  </figure>
+  <p>진단문은 글 고치는 AI에게 넘기는 작업 지시서다. 측정 프로그램을 <code>--diagnosis</code> 옵션으로 한 번 더 돌리면 입력 파일이 [진단문 → 점수표 → 원문] 순서로 다시 만들어진다. 글 고치는 AI는 입력 파일 하나를 읽는다. 짧은 규칙집에 없는 규칙 번호를 진단문에 적어도 된다. 글 고치는 AI의 기준 #2는 "진단문에 적힌 규칙은 짧은 규칙집에 없어도 고친다"로 되어 있다.</p>
+</section>
+
+<section class="col" id="s-rewrite">
+  <h2>3단계: 표시한 자리만 고친다 (AI 호출 1회)</h2>
+  <p>글 고치기는 <code>humanize-monolith</code>라는 AI를 한 번 불러 끝낸다. 입력 파일을 읽고, 규칙집을 읽고, 찾기·고치기·스스로 검사하기를 한 번에 한 뒤 <code>final.md</code>를 쓴다. 파일 읽기와 쓰기는 3번까지만 허용한다. 고치는 순서는 D 묶음(상투어 지우기)이 먼저다. 문장이 짧아져 다음 작업이 쉬워지기 때문이다. 다음은 A → I → G → H → F → B → C·J → E 순서다.</p>
+  <p>고치기 전에 글 고치는 AI는 문장마다 핵심 낱말을 목록(<code>anchor_ledger</code>)으로 적어 둔다. 조사와 어미는 바꿔도 핵심 낱말은 결과에 최소 한 번 남아야 한다. 어떤 수정이 핵심 낱말을 지우면 그 문장은 원래대로 되돌린다.</p>
+
+  <figure class="fig wide">
+    <div class="fig-head"><span class="n">그림 6</span><figcaption>여섯 문장이 차례로 바뀌는 과정. 각 문장 아래 번호표는 수정 근거가 된 규칙 번호다. 아래 장부는 핵심 낱말 16개가 결과에 남았는지 센다.</figcaption></div>
+    <div class="panel">
+      <div class="ctrls">
+        <button class="btn" type="button" id="st-play">처음부터 재생</button>
+        <button class="btn" type="button" id="st-next">다음 문장</button>
+        <button class="btn" type="button" id="st-all">결과만 보기</button>
+        <span class="state line" id="st-state">대기</span>
+      </div>
+      <div class="steps" id="steps"></div>
+      <div class="ledger">
+        <div class="box"><h4>핵심 낱말 목록 (16개)</h4><div class="anchors" id="anchors"></div></div>
+        <div class="box"><h4>AI의 자체 집계 (참고용, 최종 판정은 4단계 검사)</h4>
+          <table><tbody>
+            <tr><td>글자 수</td><td id="lg-chars">361 → 361</td></tr>
+            <tr><td>S1 규칙 남은 수</td><td id="lg-s1">4 → 4</td></tr>
+            <tr><td>연결어미 뒤 쉼표 (C-11)</td><td id="lg-c11">3 → 3</td></tr>
+            <tr><td>"~할 수 있다" (서술어 자리)</td><td id="lg-hedge">2 → 2 유지</td></tr>
+            <tr><td>요구 표현 ("~해야 한다" 등)</td><td id="lg-deo">2 → 2 유지</td></tr>
+          </tbody></table>
+        </div>
+      </div>
+    </div>
+  </figure>
+  <p>두 군데는 일부러 두었다. 두 번째와 네 번째 문장의 "있으며,"는 C-11에 해당하지만 지우지 않았다. 이유는 4단계 검사에서 드러난다. 또 "할 수 있다"는 네 번 나와 A-10에 걸리지만, A-10의 고치는 방법은 "단정으로 바꾸지 말 것"이다. "방안", "잠재력"이라는 명사가 이미 가능성의 뜻을 품은 꾸밈말 자리 둘만 지우고, 주장의 세기를 정하는 서술어 자리 둘은 그대로 두었다.</p>
+</section>
+
+<section class="col" id="s-gate">
+  <h2>4단계: 고친 글을 검사한다 (프로그램)</h2>
+  <p>글 고치는 AI가 스스로 보고한 "바뀐 글자 비율"은 참고값이다. 기준 #4의 판정은 <code>verify_gates.py</code> 프로그램이 한다. 글자 비율 하나만으로는 부족하다는 사실이 실제 사례에서 드러났다. 바뀐 글자 2.77%짜리 결과물 뒤에 손댄 문장 29.7%와 대칭 문장 75% 삭제가 숨어 있었다. 그래서 검사 프로그램은 다섯 항목을 본다.</p>
+  <div class="twrap"><table class="plain">
+    <thead><tr><th>항목</th><th>확인하는 내용</th><th>판정</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">P0 바뀐 글자</td><td>원문과 비교해 바뀐 글자의 비율</td><td>30% 이상 경고(WARN), 50% 이상 중단(ABORT)</td></tr>
+      <tr><td class="mono">P1 목표 달성</td><td>원문에서 z값이 +2.0을 넘던 항목이 고친 뒤 +1.0 아래로 내려왔는지</td><td>+2.0 넘게 남으면 미달, -1.5 아래로 내려가면 과한 수정, 둘 다 경고</td></tr>
+      <tr><td class="mono">P2 전멸</td><td>"A가 아니라 B" 꼴 문장이 5개 이상이었는데 0개가 됐는지</td><td>0개가 되면 경고 (잘 쓴 대칭 문장 1~2개는 사람 글의 힘)</td></tr>
+      <tr><td class="mono">P3 golden</td><td>없던 숫자 넣기, 각주 자리 옮기기, 인용문 바꾸기, '-하였-' 넣기, 상투어 넣기, 말하듯 쓴 어미 지우기</td><td>하나라도 걸리면 경고</td></tr>
+      <tr><td class="mono">P5 판단 세기</td><td>원문과 고친 글의 문장을 짝지어, 요구("~해야 한다")나 추측("~일 수 있다")이 사라진 문장이 있는지</td><td>한 문장이라도 사라지면 경고</td></tr>
+    </tbody>
+  </table></div>
+  <p>같은 원문을 세 가지로 고쳐 넣어 보면 검사 프로그램이 무엇을 잡는지 보인다. 하나는 채택한 결과물이고, 둘은 규칙을 지나치게 따른 결과물이다.</p>
+
+  <figure class="fig wide">
+    <div class="fig-head"><span class="n">그림 7</span><figcaption>verify_gates.py를 세 결과물에 실제로 돌린 결과. 종료 코드 0은 통과, 1은 경고(사용자에게 알리고 마무리 AI 추가), 2는 결과물 사용 금지.</figcaption></div>
+    <div class="panel gate" data-anim>
+      <div class="ctrls" id="gate-tabs" role="tablist"></div>
+      <div id="gate-body"></div>
+    </div>
+  </figure>
+  <p>쉼표를 전부 지운 세 번째 결과물을 보자. C-11 규칙을 글자 그대로 따랐더니 쉼표 사이 간격이 길어져 P1이 "미달"이 됐다. 쉼표를 지우는 수정이 다른 측정값을 반대 방향으로 밀어낸 것이다. 채택본이 긴 문장마다 쉼표를 하나씩 남긴 이유가 여기 있다. 규칙집의 고치는 방법보다 검사 프로그램의 숫자가 최종 결정권을 갖는다.</p>
+  <p>검사 직전에 자동 복원 두 가지가 먼저 돈다. <code>restore_modality.py</code>는 요구나 추측이 사라진 문장만 원문 문장으로 되돌린다. <code>strip_injected_commas.py</code>는 AI가 새로 쓴 문장에서만 연결어미 뒤 쉼표를 지운다. 원문에 있던 문장의 쉼표는 글쓴이가 찍은 쉼표이므로 손대지 않는다.</p>
+</section>
+
+<section class="col" id="s-final">
+  <h2>heavy 경로의 추가 검사: 마무리 AI</h2>
+  <p>heavy 경로이거나, 4단계 검사가 경고를 냈거나, 글 고치는 AI의 자체 검사가 두 항목 이상 실패했을 때만 마무리 AI(<code>humanize-finalizer</code>)를 한 번 더 부른다. 마무리 AI는 바뀐 부분 목록(diff)을 보지 않는다. 원문과 고친 글 전체를 나란히 놓고 직접 비교한다. 예전 검사 AI는 바뀐 부분 목록만 보다가 각주가 옮겨지고 제목이 본문에 합쳐진 사고를 놓쳤기 때문이다.</p>
+  <figure class="fig wide">
+    <div class="fig-head"><span class="n">그림 8</span><figcaption>마무리 AI가 확인하는 항목과 판정. 문제가 있는 문장만 고치고 글 전체를 다시 쓰지 않는다.</figcaption></div>
+    <div class="panel fin" data-anim>
+      <div class="box"><h4>내용 확인 15항목 (일부)</h4>
+        <ul>
+          <li class="on">사실, 숫자, 이름, 인용문, 핵심 낱말이 모두 남았는지</li>
+          <li class="on">원문에 있던 정보가 빠지지 않았는지</li>
+          <li class="on">원문에 없던 주장이 들어오지 않았는지 (빈말을 지운 자리에 새 단정이 들어왔는지)</li>
+          <li class="on">원인과 결과, 조건, 시간 순서, 긍정·부정이 그대로인지</li>
+          <li class="on">각주의 자리, 번호, 개수가 그대로인지</li>
+          <li class="on">제목과 번호 매긴 줄이 본문에 합쳐지지 않았는지</li>
+        </ul>
+      </div>
+      <div class="box"><h4>자연스러움 (두 방향)</h4>
+        <ul>
+          <li class="on">진단문이 지목한 문제가 실제로 줄었는지</li>
+          <li class="on">더 딱딱해짐: 없던 '-하였-', 사라진 '~인데요'</li>
+          <li class="on">상투어 추가: 없던 "기록적인 성과", "~로 평가된다"</li>
+          <li class="on">소설처럼 됨: 없던 비유</li>
+        </ul>
+        <h4 style="margin-top:.8rem">판정</h4>
+        <div class="vs"><span class="chip ok">accept (통과)</span><span class="chip warn">corrected (고쳐서 통과)</span><span class="chip abort">hold_and_report (사람이 확인)</span></div>
+        <h4 style="margin-top:.8rem">고치는 방식</h4>
+        <div class="vs"><span class="yes">문제 문장만 고침</span><span class="no">글 전체 다시 쓰기</span></div>
+      </div>
+    </div>
+  </figure>
+  <p>마무리 AI가 막으려는 사고는 "뜻 바꿔치기"다. 구조를 세게 고치면 비어버린 자리에 원문에 없던 주장이 들어오는 일이 생긴다. "이는 중요하다" 같은 빈말을 지우면서 "이는 시장을 바꿀 것이다" 같은 없던 주장을 만드는 식이다. 마무리 AI는 빈말을 지운 수정은 인정하고, 새로 들어온 문장이 원문의 뜻을 넘으면 되돌린다. 끝나면 <code>09_finalize.json</code>에 판정을 적고 4단계 검사를 한 번 더 돌려 바뀐 글자 비율을 확정한다.</p>
+</section>
+
+<section class="col" id="s-cost">
+  <h2>AI 호출 횟수와 비용</h2>
+  <p>경로를 셋으로 나눈 근거는 측정 결과 하나다. 1만 자 글을 7조각으로 나눠 돌렸을 때와 한 번에 돌렸을 때 결과 품질은 같았고, 쓴 토큰(AI가 읽고 쓴 글자 단위)은 4.5배 차이가 났다. 조각마다 규칙집, 진단문, 기본 지시문을 다시 읽히는 비용이 절약한 양을 모두 먹었다. 그래서 글 나누기는 heavy 경로에서만 쓰고, 그때도 측정 프로그램이 실제로 두 조각 이상 만들었을 때만 나눠 돌린다. 15,000자 이하는 나누지 않는다.</p>
+  <figure class="fig wide">
+    <div class="fig-head"><span class="n">그림 9</span><figcaption>같은 1만 자 글을 두 방식으로 돌렸을 때 쓴 토큰(실제 측정). 아래는 경로별 AI 호출 구성.</figcaption></div>
+    <div class="panel" data-anim>
+      <div class="bars">
+        <div class="brow"><div class="lab">7조각으로 나눠 호출<small>진단 1회 + 조각 고치기 6회. 조각마다 규칙집을 다시 읽음</small></div><div class="btrack"><div class="b" style="width:100%"></div><span class="n" style="--w:100%">610K</span></div></div>
+        <div class="brow"><div class="lab">한 번에 호출<small>같은 글, 같은 품질</small></div><div class="btrack"><div class="b" style="width:21.97%"></div><span class="n" style="--w:21.97%">134K 토큰</span></div></div>
+      </div>
+      <div class="calls">
+        <div class="r"><b>light</b><div class="dots"><span class="d py" title="측정 프로그램">py</span><span class="d">고침</span><span class="d py" title="검사 프로그램">py</span><small>AI 1회 · 조심스럽게 고침 · 바뀐 글자 5% 미만이면 "이미 좋은 글"로 끝냄</small></div></div>
+        <div class="r"><b>standard</b><div class="dots"><span class="d py">py</span><span class="d">진단</span><span class="d py">py</span><span class="d">고침</span><span class="d py">py</span><span class="d op">마무리</span><small>AI 2회 · 1만 자도 한 번에 고침 · 마무리 AI는 조건이 맞을 때만</small></div></div>
+        <div class="r"><b>heavy</b><div class="dots"><span class="d py">py</span><span class="d">진단</span><span class="d py">py</span><span class="d">고침</span><span class="d op">×N</span><span class="d py">py</span><span class="d">마무리</span><span class="d py">py</span><small>AI 3회 이상 · 조각 나누기는 측정 프로그램이 2조각 이상 만들었을 때만</small></div></div>
+      </div>
+      <div class="legend" style="margin-top:.8rem"><span><i class="swatch" style="background:var(--accent);border-radius:50%"></i>AI 호출</span><span><i class="swatch" style="background:var(--fg-2);border-radius:50%"></i>파이썬 프로그램 (AI 호출 없음)</span><span><i class="swatch" style="border:1.5px dashed var(--line-2);border-radius:50%"></i>조건이 맞을 때만</span></div>
+    </div>
+  </figure>
+  <p>비용 절약은 AI 모델 등급이 아니라 호출 횟수에서 온다. 세 AI 역할은 모두 같은 모델 설정을 쓰고, 어떤 모델을 쓸지는 사용자가 정한다.</p>
+</section>
+
+<section class="col" id="s-evidence">
+  <h2>수정 근거와 포함 범위</h2>
+  <p>규칙 목록은 언어학 분류에서 시작했지만, 실제로 AI 글과 사람 글을 가르는 힘이 있는지는 따로 측정했다. 2022년 이전에 나온 사람 글 60편과 세 가지 AI 모델로 만든 AI 글 60편을 비교했다. AI 모델을 바꿔도, 인용과 숫자를 넣으라는 조건을 붙여도 사람보다 높게 남은 신호만 강한 근거로 쓴다. 반대로 AI가 사람보다 덜 쓰는 표현도 신호다. 다만 "없는 표현을 만들어 넣는" 수정은 뜻을 바꿀 위험이 있어, 긴 문장 만들기처럼 내용을 더하지 않고도 가능한 수정만 규칙으로 만들었다.</p>
+  <figure class="fig wide">
+    <div class="fig-head"><span class="n">그림 10</span><figcaption>문장 1,000개당 나오는 횟수를 AI와 사람으로 비교한 배수(로그 눈금). 오른쪽은 AI가 더 많이 쓰는 표현, 왼쪽은 사람이 더 많이 쓰는 표현. 숫자는 empirical-validation.md의 측정값.</figcaption></div>
+    <div class="panel ratio" data-anim>
+      <div id="ratio"></div>
+      <div class="raxis"><span></span><div class="ax" id="raxis"></div></div>
+      <div class="legend"><span><i class="swatch" style="background:var(--ai)"></i>AI가 사람보다 많이 쓴다</span><span><i class="swatch" style="background:var(--human)"></i>사람이 AI보다 많이 쓴다</span></div>
+    </div>
+  </figure>
+  <p>같은 측정에서 버린 규칙도 있다. 빠뜨린 규칙이 아니라 일부러 뺀 규칙이다.</p>
+  <ul>
+    <li><strong>A-2 "~를 통해" 모두 바꾸기</strong>: 번역하지 않은 한국어 글쓴이가 번역문보다 2배 더 쓴다(최희경 2016). 반복될 때만 줄이고 1~2회는 둔다.</li>
+    <li><strong>I-1 "것이다" 마무리 모두 바꾸기</strong>: 사람 43.0 대 AI 20.4로 사람이 2배 더 쓴다. 연속 3회 이상일 때만 일부 바꾼다.</li>
+    <li><strong>H-1 문장 앞 접속사</strong>: AI 모델 한 개(haiku)만 많이 썼다. 다른 두 모델은 사람과 차이가 없어 S1 목록에서 뺐다.</li>
+    <li><strong>J-2 따옴표가 적음</strong>: 인용을 넣으라는 조건을 붙이자 AI가 오히려 2.4배 더 썼다. 글쓰기 조건 때문에 생긴 차이라 규칙 방향을 바꿨다.</li>
+  </ul>
+  <h3>워터마크는 손대지 않는다</h3>
+  <p>2026년 8월 Anthropic은 SynthID 방식의 글 워터마크를 넣기 시작했다. 낱말을 바꿔 넣는 방식이 아니라, 비슷하게 좋은 후보 낱말 중 하나를 고르는 난수를 정해진 값으로 바꾸는 방식이라 통계 무늬로 남는다. 저장소는 워터마크 지우기 기능을 넣지 않기로 정했다. 탐지 도구가 없어 지워졌는지 확인할 수 없고, 확인 없이 지우려면 낱말을 마구 흔들어야 해서 자연스러운 한국어라는 목표와 어긋나기 때문이다. 어색한 문장을 고치다가 통계 무늬가 흐려지는 결과는 정상 동작이지만, 그 효과를 기능으로 만들어 광고하지 않는다. 대신 워터마크 전후의 한국어 품질을 여러 번 반복 측정해 비교하는 프로그램을 두었다.</p>
+</section>
+
+<section class="col" id="s-files">
+  <h2>결과 파일 목록</h2>
+  <p>한 번 실행하면 현재 폴더 아래 <code>_workspace/{날짜-번호-TAG}/</code>에 파일이 남는다. TAG는 실행을 구분하는 네 글자다. 한 컴퓨터에서 여러 작업이 동시에 돌 때 번호만으로는 폴더가 겹쳐, 검사 프로그램이 다른 작업의 원문과 내 결과물을 비교하는 사고가 났었다.</p>
+  <figure class="fig wide">
+    <div class="fig-head"><span class="n">그림 11</span><figcaption>경로별로 생기는 파일. 파란색은 AI 호출 결과물, 회색은 프로그램 결과물.</figcaption></div>
+    <div class="panel">
+      <div class="ctrls" id="file-tabs" role="group" aria-label="경로 선택"></div>
+      <div class="tree" id="tree"></div>
+    </div>
+  </figure>
+  <p>사용자에게 돌려주는 결과는 네 가지다. 한 줄 요약(경로, 바뀐 글자 비율, 등급, 자체 검사 통과 수), 고친 글 본문, <code>final.md</code> 끝의 요약 표, 등급이 B 이하일 때 heavy로 다시 돌리라는 안내. 바뀐 글자 비율은 언제나 검사 프로그램이 낸 값을 쓴다. AI가 스스로 센 값으로 바꾸지 않는다.</p>
+</section>
+
+<section class="col">
+  <h2>정리</h2>
+  <p>im-not-ai에서 AI가 하는 일은 두 가지뿐이다. 글의 가장 큰 문제를 고르는 일, 표시된 자리를 사람 말로 바꾸는 일. 무엇을 잴지, 어느 경로로 보낼지, 고친 결과를 받아들일지는 모두 프로그램이 정한다. 결과가 매번 달라질 수 있는 AI 단계는 결과가 늘 같은 프로그램 단계 사이에 끼워 두 번 검사받는다. 그래서 "내용은 한 글자도 건드리지 않는다"는 약속은 부탁이 아니라 프로그램의 종료 코드로 남는다.</p>
+</section>
+
+</main>
+
+<footer class="col">
+  <p>출처: <code>CLAUDE.md</code>, <code>skills/humanize-korean/SKILL.md</code>, <code>references/ai-tell-taxonomy.md</code>, <code>references/quick-rules.md</code>, <code>references/empirical-validation.md</code>, <code>references/design-notes.md</code>, <code>agents/humanize-{monolith,diagnostician,finalizer}.md</code>, <code>scripts/prepare_monolith_input.py</code>, <code>scripts/verify_gates.py</code>. 예시 문단은 설명용으로 만든 글이며, 그림 3·4·7의 숫자는 저장소 프로그램을 실제로 실행해 얻었다. 고친 글과 진단문은 규칙집을 따라 사람이 쓴 예시다.</p>
+</footer>
+
+<script>
+(function(){
+"use strict";
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>Array.from(r.querySelectorAll(s));
+const reduce=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* ---------- 규칙 이름 (taxonomy에서 추출) ---------- */
+const NAMES={"A-1":"\"~에 대하여/대해서\" 반복","A-2":"\"~를 통하여/통해\" 반복","A-3":"\"~에 있어(서)\"","A-4":"\"~라는 점에서\"","A-5":"\"~와 관련하여/관련된\"","A-6":"\"~에 기반하여/바탕으로\" 반복","A-7":"\"가지고 있다\" (영어 have 직역)","A-8":"겹친 피동 \"~되어진다\"","A-9":"\"~에 의해\" 피동문","A-10":"\"~할 수 있다\" 반복","A-11":"\"~을 위해\" 목적절 반복","A-12":"\"만들어지다/이루어지다\"","A-13":"명사만 나열 (조사 생략)","A-14":"\"그리고\"로 절 연결","A-15":"추상 주어 + 뜻이 넓은 동사","A-16":"문맥에 맞지 않는 대명사","A-17":"사물에 '-들' 붙이기 (보류)","A-18":"긴 꾸밈말 앞세우기","A-19":"겹친 조사 (~에서의/~와의)","A-20":"\"~되고 있다\" 반복","A-21":"\"단순한 X를 넘어 Y\"","A-22":"\"~은 명확하다\" 얹기","A-23":"\"발판을 마련하다\" 공식","A-24":"\"더 이상 ~ 않다\" (no longer)",
+"B-1":"괄호 영어 병기 반복","B-2":"불필요한 영어 단어","B-3":"과한 영어 인용구","B-4":"\"~라고 알려진\"",
+"C-1":"기계적 번호 나열","C-2":"과한 글머리표","C-3":"반복되는 소제목","C-4":"문단 첫 문장 요약 공식","C-5":"이모지 남용","C-6":"소제목 아래 요약 상자","C-7":"\"먼저·반면·결국\" 3단 공식","C-8":"대칭 문장 \"A가 아니라 B\" 반복","C-9":"숫자 괄호 1) 2) 3)","C-10":"콜론 소제목 \"X: Y\"","C-11":"연결어미 뒤 쉼표","C-12":"쉼표 포함률",
+"D-1":"마무리 접속사 (결론적으로·따라서)","D-2":"중요성 과장 (시사하는 바가 크다)","D-3":"나열 도입 (크게 세 가지로)","D-4":"AI 특유의 과장 낱말","D-5":"사람처럼 말하는 추상 주어","D-6":"마무리 공식 \"~할 때입니다\"","D-7":"변환 공식 \"X에서 Y로\"","D-8":"\"중요한 것은 X이다\" 꼴","D-9":"\"결국 ~로 이어진다\"","D-10":"\"~하는 이유다\" 마무리","D-11":"막연한 시간 \"향후·앞으로\"","D-12":"내용 없는 반론 \"과제도 남아 있다\"","D-13":"수필 공식 \"어쩌면·비로소\"","D-14":"비유 남용",
+"E-1":"문장 길이가 고름 (긴 문장 없음)","E-2":"같은 어미 반복","E-3":"모든 문단이 3~4문장","E-4":"짧은 문장만 계속","E-5":"쉼표 사이 간격","E-6":"쉼표 앞뒤 품사 다양성","E-7":"높임말 수준 섞임",
+"F-1":"정도 부사 남용","F-2":"같은 뜻 꾸밈말 두 번","F-3":"기능+역할 복합어","F-4":"-성/-적/-화 남용","F-5":"\"~적 N\" 추상어 연쇄","F-7":"뜻이 넓은 정책 동사 (확대·강화)",
+"G-1":"추측 어미 반복","G-2":"두세 겹 완곡 표현","G-3":"안전한 양쪽 균형 표현",
+"H-1":"문장 앞 접속사 과다","H-2":"\"하지만/그러나\" 번갈아 남용","H-3":"\"이는 ~\" 반복","H-4":"\"즉\" 남용",
+"I-1":"\"것이다\" 마무리 남용","I-2":"\"점·바·수·데\" 반복","I-3":"\"~라는 것\"","I-4":"\"~할 필요가 있다\" 권고형 마무리","I-5":"\"~이/가 필요하다\"","I-6":"\"~능력\" 추상명사 연쇄","I-7":"주체 없는 \"~다는 분석이다\"",
+"J-1":"과한 굵은 글씨","J-2":"따옴표 과다","J-3":"대시(—) 남용","J-4":"괄호 설명 과다"};
+const SEV={"A-1":1,"A-3":1,"A-7":1,"A-8":1,"A-16":1,"C-5":1,"C-8":1,"C-11":1,"B-4":3,
+"A-2":2,"A-4":2,"A-5":2,"A-6":2,"A-9":2,"A-11":2,"A-12":2,"A-13":2,"A-14":2,"A-15":2,"A-18":2,"A-22":2,"A-24":2,"B-1":2,"B-3":2,"C-1":2,"C-2":2,"C-3":2,"C-4":2,"C-6":2,"C-9":2,"C-10":2,"C-12":2,"D-5":2,"D-6":2,"D-7":2,"D-8":2,"D-9":2,"E-5":2,"E-6":2,"F-5":2,"G-3":2,"H-4":2,"I-6":2,"J-1":2};
+const QUICK=new Set("A-1 A-10 A-11 A-15 A-18 A-19 A-20 A-21 A-22 A-24 A-3 A-5 A-6 A-7 A-8 A-9 B-1 B-2 C-10 C-11 C-2 C-5 C-7 C-8 C-9 D-1 D-10 D-11 D-12 D-13 D-14 D-2 D-3 D-5 D-6 D-7 D-8 D-9 E-1 E-2 E-7 F-4 F-5 F-7 G-1 G-2 H-4 I-2 I-3 I-4 I-7 J-1 J-2 J-3".split(" "));
+const CATS=[["A","번역 말투",24],["B","영어 단어 과다",4],["C","글 짜임새",12],["D","AI 상투어",14],["E","문장 리듬",7],["F","꾸밈말 과다",6],["G","완곡 표현",3],["H","접속사 과다",4],["I","형식 명사",7],["J","글꾸밈 남용",4]];
+const CATSEV={A:"S1~S2",B:"S2",C:"S1~S2",D:"S1",E:"S2",F:"S2",G:"S2",H:"S2",I:"S2",J:"S2~S3"};
+
+/* ---------- 예시 문단: 문장별 바뀐 부분 ----------
+   k: keep(그대로) | del(지움) | add(넣음). del 바로 뒤의 add는 같은 칸에 들어간다. id: 근거 규칙. a: 핵심 낱말 */
+const S=[
+ {segs:[{k:"keep",t:"생성형 AI",a:1},{k:"keep",t:"의 도입은 "},{k:"keep",t:"기업",a:1},{k:"keep",t:"의 "},{k:"keep",t:"업무 방식",a:1},{k:"del",t:"에 있어서",id:"A-3"},{k:"add",t:"을"},{k:"keep",t:" 근본적"},{k:"del",t:"인 변화를 가져오고 있다",id:"A-15"},{k:"add",t:"으로 바꾸고 있다"},{k:"keep",t:"."}],
+  why:"\"~에 있어서\"는 영어 in terms of를 그대로 옮긴 말이라 조사 \"을\"로 바로 잇는다(A-3, S1). \"변화를 가져오다\"는 \"바꾸다\"로 줄인다(A-15).",
+  anchors:["생성형 AI","기업","업무 방식"]},
+ {segs:[{k:"keep",t:"많은 기업"},{k:"del",t:"들",id:"A-17"},{k:"keep",t:"이 AI 기술"},{k:"del",t:"을 통해",id:"A-2"},{k:"add",t:"로"},{k:"keep",t:" "},{k:"keep",t:"생산성",a:1},{k:"keep",t:"을 높일"},{k:"del",t:" 수 있는",id:"A-10"},{k:"keep",t:" 방안을 모색하고 있으며, 이러한 흐름은 더욱 "},{k:"del",t:"가속화되고 있다",id:"A-20"},{k:"add",t:"빨라지고 있다"},{k:"keep",t:"."}],
+  why:"\"~을 통해\"는 한 번만 나와 지울 의무는 없지만 조사 \"로\"가 더 짧다(A-2는 반복될 때만 문제). \"할 수 있다\" 4회 중 꾸밈말 자리만 지운다(A-10, 단정으로 바꾸지 않음). \"가속화되고 있다\"는 \"빨라지고 있다\"로(A-20). \"있으며,\"의 쉼표는 남긴다. '-들'은 보류 규칙이라 수정 근거가 아니라 참고 표시다.",
+  anchors:["생산성"]},
+ {segs:[{k:"keep",t:"그러나 "},{k:"del",t:"중요한 것은 ",id:"D-8"},{k:"keep",t:"속도",a:1},{k:"del",t:"가 아니라",id:"C-8"},{k:"add",t:"보다"},{k:"keep",t:" "},{k:"keep",t:"방향",a:1},{k:"keep",t:"이"},{k:"del",t:"다."},{k:"add",t:" 중요하다."}],
+  why:"\"중요한 것은 X이다\" 꼴은 주어와 서술어를 바로 잇는다(D-8). \"A가 아니라 B\" 꼴은 사람 글보다 AI 글에 12배 많은 가장 강한 신호다(C-8, S1). 고치는 방법 예시 그대로 \"속도보다 방향이 중요하다\".",
+  anchors:["속도","방향"]},
+ {segs:[{k:"keep",t:"기술",a:1},{k:"del",t:"에 의해 주도되는",id:"A-9"},{k:"add",t:"이 주도하는"},{k:"keep",t:" 변화는 "},{k:"keep",t:"조직 문화",a:1},{k:"del",t:"와의 충돌을 야기할",id:"A-19"},{k:"add",t:"와 충돌할"},{k:"keep",t:" 수 있으며, 이는 "},{k:"keep",t:"구성원",a:1},{k:"keep",t:"들의 "},{k:"keep",t:"저항",a:1},{k:"keep",t:"으로 이어질 수 있다."}],
+  why:"\"~에 의해\" 꼴은 행동하는 쪽을 주어로 세운다(A-9). 겹친 조사 \"와의\"는 풀고(A-19), \"충돌을 야기하다\"는 \"충돌하다\"로 줄인다. \"~할 수 있다\" 두 건은 글쓴이의 판단 세기라 그대로 두고, \"이는\"도 한 번뿐이라 둔다(H-3는 반복될 때만 문제).",
+  anchors:["기술","조직 문화","구성원","저항"]},
+ {segs:[{k:"del",t:"따라서 ",id:"D-1"},{k:"keep",t:"기업",a:1},{k:"keep",t:"은 "},{k:"del",t:"단순한 ",id:"A-21"},{k:"keep",t:"도구 도입",a:1},{k:"del",t:"을 넘어",id:"A-21"},{k:"add",t:"만이 아니라"},{k:"keep",t:" 일하는 방식 자체를 "},{k:"keep",t:"재설계",a:1},{k:"keep",t:"할 필요가 있다."}],
+  why:"마무리 접속사 \"따라서\"는 글에 두 번 나와 하나를 지운다(D-1). \"단순한 X를 넘어\" 꼴은 고치는 방법대로 \"X만이 아니라\"로 푼다(A-21). 요구 표현 \"할 필요가 있다\"는 그대로 둔다.",
+  anchors:["기업","도구 도입","재설계"]},
+ {segs:[{k:"del",t:"결론적으로, ",id:"D-1"},{k:"keep",t:"생성형 AI",a:1},{k:"keep",t:"는 업무의 "},{k:"keep",t:"효율성",a:1},{k:"keep",t:"을 획기적으로 높일"},{k:"del",t:" 수 있는",id:"A-10"},{k:"keep",t:" "},{k:"keep",t:"잠재력",a:1},{k:"del",t:"을 가지고 있지만",id:"A-7"},{k:"add",t:"이 있지만"},{k:"keep",t:", "},{k:"del",t:"이것이 성공적으로 안착되기 위해서는",id:"A-11"},{k:"add",t:"성공적으로 안착하려면"},{k:"keep",t:" "},{k:"keep",t:"기술적 준비",a:1},{k:"keep",t:"와 "},{k:"keep",t:"문화적 준비",a:1},{k:"keep",t:"가 함께 이루어져야 한다"},{k:"del",t:"는 점을 시사하는 바가 크다",id:"D-2"},{k:"keep",t:"."}],
+  why:"\"결론적으로\"는 마지막 문장 자체가 결론이라 지운다(D-1, S1). \"가지고 있다\"는 영어 have를 그대로 옮긴 말이다(A-7, S1). \"~되기 위해서는\"은 \"~하려면\"으로(A-11). \"시사하는 바가 크다\"는 뜻 없이 중요하다고만 말하는 표현이라 지우고 문장을 끝낸다(D-2, S1). 요구 표현 \"이루어져야 한다\"는 그대로.",
+  anchors:["생성형 AI","효율성","잠재력","기술적 준비","문화적 준비"]}
+];
+const ANCHORS=["생성형 AI","기업","업무 방식","생산성","속도","방향","기술","조직 문화","구성원","저항","도구 도입","재설계","효율성","잠재력","기술적 준비","문화적 준비"];
+
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;");}
+/* 바뀌는 부분(del, add)은 한 칸(slot)에 겹쳐 넣는다. 칸의 크기는 전·후 중 큰 쪽으로 고정된다. */
+function renderSegs(segs){
+  let out="", i=0;
+  while(i<segs.length){
+    const g=segs[i];
+    if(g.k==="keep"){ out+=`<span class="seg keep${g.a?" anchor":""}">${esc(g.t)}</span>`; i++; continue; }
+    const del=g.k==="del"?g:null; const next=segs[i+1];
+    const add=(del&&next&&next.k==="add")?next:(g.k==="add"?g:null);
+    const title=del&&del.id?` title="${del.id} ${esc(NAMES[del.id]||"")}"`:"";
+    out+=`<span class="slot${(del&&!add)?" only":""}"${title}>`;
+    if(del) out+=`<span class="del">${esc(del.t)}${del.id?`<sup class="idc">${del.id}</sup>`:""}</span>`;
+    if(add) out+=`<span class="add">${esc(add.t)}</span>`;
+    out+=`</span>`;
+    i+= (del&&add&&next===add)?2:1;
+  }
+  return out;
+}
+
+/* ---------- 그림 0 ---------- */
+(function(){
+  const box=$("#hero"), txt=$("#hero-txt"), lbl=$("#hero-lbl"), btn=$("#hero-toggle");
+  txt.innerHTML=renderSegs(S[5].segs);
+  let after=false, timer=null, running=!reduce;
+  function flip(){ after=!after; txt.classList.toggle("after",after); box.classList.toggle("after",after); lbl.textContent=after?"고친 글":"AI 초안"; }
+  function tick(){ flip(); timer=setTimeout(tick, after?6500:5200); }
+  if(running){ timer=setTimeout(tick,5200); } else { btn.textContent="전환"; }
+  btn.addEventListener("click",()=>{
+    if(reduce){ flip(); return; }
+    running=!running; btn.textContent=running?"일시정지":"재생";
+    if(running){ timer=setTimeout(tick,800);} else { clearTimeout(timer); }
+  });
+})();
+
+/* ---------- 그림 1 ---------- */
+(function(){
+  const t=$("#layers-txt");
+  t.innerHTML=S.map(s=>renderSegs(s.segs)).join(" ");
+  const set=m=>{
+    t.classList.toggle("show-anchor",m!=="marks");
+    t.classList.toggle("hide-marks",m==="anchor");
+    $$("[data-layer]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.layer===m)));
+  };
+  $$("[data-layer]").forEach(b=>b.addEventListener("click",()=>set(b.dataset.layer)));
+  set("marks");
+})();
+
+/* ---------- 그림 2 ---------- */
+(function(){
+  const root=$("#pmap"), cap=$("#pmap-cap");
+  let delay=0;
+  CATS.forEach(([c,label,n])=>{
+    const cat=document.createElement("div"); cat.className="cat"; cat.innerHTML=`<b>${c}</b>${label} <span class="small">${n}</span>`;
+    const row=document.createElement("div"); row.className="row";
+    const ids=[];
+    if(c==="F"){ ids.push(...[1,2,3,4,5,7].map(i=>"F-"+i)); } else { for(let i=1;i<=n;i++) ids.push(c+"-"+i); }
+    ids.forEach(id=>{
+      const b=document.createElement("button"); b.type="button"; b.className="sq";
+      const sv=SEV[id]; if(sv) b.classList.add("s"+sv);
+      if(id==="A-17") b.classList.add("hold");
+      if(QUICK.has(id)) b.classList.add("q");
+      b.style.transitionDelay=(delay+=0.012)+"s";
+      const sevTxt=sv?("S"+sv):("묶음 기본 "+CATSEV[c]);
+      b.setAttribute("aria-label",`${id} ${NAMES[id]||""} (${sevTxt})`);
+      const show=()=>{cap.innerHTML=`<b>${id}</b> ${esc(NAMES[id]||"")} · ${sevTxt}${QUICK.has(id)?" · 짧은 규칙집에 있음":" · 진단 AI만 봄"}`;};
+      b.addEventListener("mouseenter",show); b.addEventListener("focus",show); b.addEventListener("click",show);
+      row.appendChild(b);
+    });
+    root.appendChild(cat); root.appendChild(row);
+  });
+})();
+
+/* ---------- 그림 3 ---------- */
+const ZMIN=-2, ZMAX=6;
+const zpct=z=>((Math.max(ZMIN,Math.min(ZMAX,z))-ZMIN)/(ZMAX-ZMIN)*100);
+(function(){
+  const rows=[
+    {k:"comma_inclusion_rate",l:"쉼표가 있는 문장 비율",v:"0.50",z:1.05,base:"사람 37.7% · AI 61.0%"},
+    {k:"comma_usage_rate",l:"문장당 쉼표 개수",v:"0.67",z:0.14,base:"사람 0.52 · AI 2.56"},
+    {k:"comma_segment_length",l:"쉼표 사이 간격(어절)",v:"8.90",z:2.46,base:"사람 7.07 · AI 8.56"},
+    {k:"hanja_nominalizer_density",l:"-성/-적/-화 비율",v:"0.022",z:-1.25,base:"한자어 명사 꼴"},
+    {k:"lexical_diversity",l:"어휘 다양성",v:"0.89",z:4.75,base:"높을수록 사람 글 · 고칠 대상 아님",dim:true}
+  ];
+  const root=$("#zrows");
+  rows.forEach(r=>{
+    const neg=r.z<0, left=zpct(neg?r.z:0), w=Math.abs(zpct(r.z)-zpct(0));
+    const cls=r.dim?"dim":(r.z>2?"hit2":(r.z>1?"hit1":""));
+    const flag=r.dim?"":(r.z>2?" ★ S1":(r.z>1?" · S2":""));
+    root.insertAdjacentHTML("beforeend",`<div class="zrow"><div class="nm" title="${r.k}"><span class="key">${r.k}</span><small>${r.l} · ${r.base}</small></div>
+      <div class="ztrack"><i class="t1" style="left:${zpct(1)}%"></i><i class="zero" style="left:${zpct(0)}%"></i><i class="t2" style="left:${zpct(2)}%"></i><div class="bar ${neg?"neg":""} ${cls}" style="left:${left}%;width:${w}%"></div></div>
+      <div class="val">${r.v} <span style="color:${r.z>2&&!r.dim?"var(--s1)":(r.z>1&&!r.dim?"var(--s2)":"inherit")}">z ${r.z>0?"+":""}${r.z.toFixed(2)}${flag}</span></div></div>`);
+  });
+  $("#zaxis").innerHTML=[-2,-1,0,1,2,3,4,5,6].map(z=>`<span style="left:${zpct(z)}%">${z===0?"사람 평균":(z===2?"AI 평균":(z>0?"+"+z:z))}</span>`).join("");
+  const tells=[["conclusion_pivot_count","D-1","2","결론적으로 · 따라서"],["by_passive_count","A-9","1","에 의해 주도되는"],["\"중요한 것은\" 꼴","D-8","1","중요한 것은 ~이다"],["\"~되고 있다\"","A-20","1","가속화되고 있다"],["겹친 피동 · have 직역 · 겹친 조사 · 양쪽 균형 표현","","0",""]];
+  $("#tells").innerHTML=tells.map(t=>`<span class="chip">${esc(t[0])}${t[1]?` <b>${t[1]}</b>`:""} = ${t[2]}${t[3]?`<i>${esc(t[3])}</i>`:""}</span>`).join("")+`<span class="chip acc">합계 lexical_tell_count = 5</span>`;
+})();
+
+/* ---------- 그림 4 ---------- */
+const SAMPLES=[
+ {name:"보통의 AI 초안 (예시 문단)",chars:361,tells:5,risk:"medium",score:4,hint:"standard",reason:"개수 세기 항목 5건 · risk_band medium → 진단 1회 + 고치기 1회",detail:"conclusion_pivot 2 · by_passive 1 · D-8 1 · A-20 1"},
+ {name:"잘 쓴 구어체 글 (테스트 예문 01)",chars:197,tells:0,risk:"low",score:0,hint:"light",reason:"개수 세기 항목 0건 · risk_band low → AI 1회, 조심스럽게 고침. 개수로 못 세는 티는 글 고치는 AI가 규칙집으로 잡는다",detail:"\"어제 발표 보셨어요? 진짜 놀랐는데요…\" 말하듯 쓴 197자"},
+ {name:"상투어 가득한 글 (설명용으로 만듦)",chars:656,tells:18,risk:"medium",score:4,hint:"standard",reason:"개수 세기 항목 18건이지만 risk_band medium → heavy 조건(risk high) 미충족, 진단 1회 + 고치기 1회",detail:"conclusion_pivot 4 · 양쪽 균형 표현 4 · 겹친 피동 2 · 겹친 조사 1 · D-8/D-10/A-20 각 1 · F-7 2 · D-1 변형 1 · 쉼표 문장 비율 z +5.34 (쉼표 항목은 3점까지만 인정)"},
+ {name:"아주 긴 글 (15,000자 초과)",chars:16200,tells:3,risk:"low",score:1,hint:"heavy",reason:"16,200자(>15,000) → 진단 + 조각 나누기. 길이 조건은 티 개수와 상관없이 heavy",detail:"근거: 9,817자 글을 6조각으로 돌려 610K 토큰을 쓴 사고 뒤, 조각 나누기 기준과 heavy 기준을 15,000자 하나로 통일"}
+];
+(function(){
+  const sroot=$("#samples"), sig=$("#sig"), lad=$("#ladder"), big=$("#route-big"), why=$("#route-reason");
+  const rungs=[
+    {q:"R1",cond:"글자 수 &gt; <b>15,000</b>",res:"heavy",test:s=>s.chars>15000},
+    {q:"R2",cond:"risk_band = high <b>그리고</b> 개수 세기 항목 ≥ <b>8</b>",res:"heavy",test:s=>s.risk==="high"&&s.tells>=8},
+    {q:"R3",cond:"개수 세기 항목 ≤ <b>2</b> <b>그리고</b> risk_band가 low 또는 medium",res:"light",test:s=>s.tells<=2&&(s.risk==="low"||s.risk==="medium")},
+    {q:"R4",cond:"나머지 전부",res:"standard",test:()=>true}
+  ];
+  lad.innerHTML=rungs.map(r=>`<div class="rung"><span class="q">${r.q}</span><span class="cond">${r.cond}</span><span class="res">→ ${r.res}</span></div>`).join("");
+  const els=$$(".rung",lad);
+  let timers=[];
+  function pick(i){
+    const s=SAMPLES[i];
+    timers.forEach(clearTimeout); timers=[];
+    $$("button",sroot).forEach((b,j)=>b.setAttribute("aria-pressed",String(i===j)));
+    sig.innerHTML=`<div><div class="k">글자 수</div><div class="v">${s.chars.toLocaleString()}<small>자</small></div></div><div><div class="k">개수 세기 항목 합계</div><div class="v">${s.tells}<small>건</small></div></div><div><div class="k">risk_band</div><div class="v">${s.risk}<small>점수 ${s.score}</small></div></div>`;
+    els.forEach(e=>e.classList.remove("yes","no"));
+    let hit=-1;
+    rungs.forEach((r,k)=>{ if(hit>=0) return; if(r.test(s)){hit=k;} });
+    els.forEach((e,k)=>{ timers.push(setTimeout(()=>{ e.classList.add(k<hit?"no":(k===hit?"yes":"")); if(k===hit){ big.textContent=s.hint; why.textContent=s.reason+" · "+s.detail; } }, reduce?0:k*450)); });
+  }
+  SAMPLES.forEach((s,i)=>{ const b=document.createElement("button"); b.type="button"; b.className="btn"; b.textContent=s.name; b.addEventListener("click",()=>pick(i)); sroot.appendChild(b); });
+  pick(0);
+})();
+
+/* ---------- 그림 6 ---------- */
+(function(){
+  const root=$("#steps"), an=$("#anchors"), st=$("#st-state");
+  root.innerHTML=S.map((s,i)=>`<div class="step" data-i="${i}"><span class="no">S${i+1}</span><div><div class="txt">${renderSegs(s.segs)}</div><div class="tags">${[...new Set(s.segs.filter(g=>g.id).map(g=>g.id))].map(id=>`<span class="chip ${SEV[id]===1?"s1":(SEV[id]===2?"s2":"")}" title="${esc(NAMES[id]||"")}">${id}${id==="A-17"?" 보류":""}</span>`).join("")}</div><div class="why">${esc(s.why)}</div></div></div>`).join("");
+  an.innerHTML=ANCHORS.map(a=>`<span data-a="${esc(a)}">${esc(a)}</span>`).join("");
+  const steps=$$(".step",root), txts=steps.map(e=>$(".txt",e)), anchors=$$("span",an);
+  const S1_BEFORE=4; // A-3, C-8, A-7, D-2
+  const s1PerStep=[1,0,1,0,0,2], charsPerStep=[-8,-10,-6,-8,-6,-39];
+  let cur=0, timer=null;
+  function apply(n){
+    cur=n;
+    steps.forEach((e,i)=>{ e.classList.toggle("done",i<n); e.classList.toggle("cur",i===n-1); txts[i].classList.toggle("after",i<n); });
+    const done=new Set(); S.slice(0,n).forEach(s=>s.anchors.forEach(a=>done.add(a)));
+    anchors.forEach(a=>a.classList.toggle("ok",done.has(a.dataset.a)));
+    const chars=361+charsPerStep.slice(0,n).reduce((a,b)=>a+b,0);
+    const s1=S1_BEFORE-s1PerStep.slice(0,n).reduce((a,b)=>a+b,0);
+    $("#lg-chars").textContent=`361 → ${chars}`;
+    $("#lg-s1").textContent=`${S1_BEFORE} → ${s1}`;
+    $("#lg-s1").style.color=s1===0?"var(--add)":"";
+    st.textContent=n===0?"대기":(n<S.length?`${n}/${S.length} 문장 처리`:"완료 · 핵심 낱말 16/16 남음");
+  }
+  const STEP_MS=4800;
+  function play(){ clearTimeout(timer); apply(0); let i=0; const step=()=>{ i++; apply(i); if(i<S.length) timer=setTimeout(step, STEP_MS); }; timer=setTimeout(step, reduce?0:1500); }
+  $("#st-play").addEventListener("click",play);
+  $("#st-next").addEventListener("click",()=>{ clearTimeout(timer); apply(Math.min(S.length,cur+1)); });
+  $("#st-all").addEventListener("click",()=>{ clearTimeout(timer); apply(S.length); });
+  apply(0);
+  let played=false;
+  if("IntersectionObserver" in window && !reduce){
+    const io=new IntersectionObserver(es=>{ es.forEach(e=>{ if(e.isIntersecting&&!played){ played=true; play(); io.disconnect(); } }); },{threshold:.35});
+    io.observe(root);
+  } else { apply(S.length); }
+})();
+
+/* ---------- 그림 7 ---------- */
+const GATE=[
+ {name:"채택본",text:"생성형 AI의 도입은 기업의 업무 방식을 근본적으로 바꾸고 있다. 많은 기업이 AI 기술로 생산성을 높일 방안을 모색하고 있으며, 이러한 흐름은 더욱 빨라지고 있다. 그러나 속도보다 방향이 중요하다. 기술이 주도하는 변화는 조직 문화와 충돌할 수 있으며, 이는 구성원들의 저항으로 이어질 수 있다. 기업은 도구 도입만이 아니라 일하는 방식 자체를 재설계할 필요가 있다. 생성형 AI는 업무의 효율성을 획기적으로 높일 잠재력이 있지만, 성공적으로 안착하려면 기술적 준비와 문화적 준비가 함께 이루어져야 한다.",
+  rate:20.1,p0:"ok",zb:2.46,za:0.65,p1:"달성",p1s:"ok",anti:"1 → 1 · 검사 안 함 (원문 대칭 문장이 5개 미만)",golden:"통과",touch:"100% (6/6 문장) · 참고용",mod:"사라진 문장 0 · 요구 2→2 · 추측 1→1",verdict:"OK · 통과",vs:"ok",exit:0,
+  note:"긴 문장마다 쉼표를 하나씩 남겼다. 쉼표 사이 간격의 z값이 +2.46에서 +0.65로 내려와 P1을 달성했다."},
+ {name:"너무 많이 고친 글",text:"생성형 AI가 들어오면서 기업이 일하는 방식이 뿌리부터 바뀌고 있다. 많은 기업이 AI로 생산성을 높일 방안을 찾고 있고, 이 흐름은 점점 빨라진다. 그러나 속도보다 방향이 중요하다. 기술이 주도하는 변화는 조직 문화와 충돌할 수 있고, 그 충돌은 구성원의 저항으로 이어질 수 있다. 그래서 기업은 도구만 들여올 게 아니라 일하는 방식 자체를 다시 설계할 필요가 있다. 생성형 AI는 업무 효율을 크게 높일 잠재력이 있지만, 제대로 안착하려면 기술적 준비와 문화적 준비가 함께 이루어져야 한다.",
+  rate:32.4,p0:"warn",zb:2.46,za:0.95,p1:"달성",p1s:"ok",anti:"1 → 0 · 검사 안 함 (원문 대칭 문장이 5개 미만)",golden:"통과",touch:"100% (6/6 문장) · 참고용",mod:"사라진 문장 0 · 요구 2→2 · 추측 1→1",verdict:"WARN · 사용자에게 알리고 마무리 AI 추가",vs:"warn",exit:1,
+  note:"규칙에 걸리지 않은 자리까지 손댔다(\"뿌리부터\", \"들여올 게 아니라\", \"재설계\" → \"다시 설계\"). 뜻은 같지만 바뀐 글자가 30%를 넘어 기준 #4에 걸린다. 핵심 낱말 \"재설계\"도 사라졌다."},
+ {name:"쉼표를 전부 지운 글",text:"생성형 AI의 도입은 기업의 업무 방식을 근본적으로 바꾸고 있다. 많은 기업이 AI 기술로 생산성을 높일 방안을 모색하고 있으며 이러한 흐름은 더욱 빨라지고 있다. 그러나 속도보다 방향이 중요하다. 기술이 주도하는 변화는 조직 문화와 충돌할 수 있으며 이는 구성원들의 저항으로 이어질 수 있다. 기업은 도구 도입만이 아니라 일하는 방식 자체를 재설계할 필요가 있다. 생성형 AI는 업무의 효율성을 획기적으로 높일 잠재력이 있지만 성공적으로 안착하려면 기술적 준비와 문화적 준비가 함께 이루어져야 한다.",
+  rate:20.6,p0:"ok",zb:2.46,za:5.72,p1:"미달",p1s:"warn",anti:"1 → 1 · 검사 안 함 (원문 대칭 문장이 5개 미만)",golden:"통과",touch:"100% (6/6 문장) · 참고용",mod:"사라진 문장 0 · 요구 2→2 · 추측 1→1",verdict:"WARN · 사용자에게 알리고 마무리 AI 추가",vs:"warn",exit:1,
+  note:"C-11 규칙을 글자 그대로 따라 연결어미 뒤 쉼표 3개를 전부 지웠다. 쉼표 사이 간격이 11.3어절로 늘어 z값이 +5.72로 치솟았다. 원문에서 S1 신호였던 항목이 더 나빠졌으므로 P1 미달."}
+];
+(function(){
+  const tabs=$("#gate-tabs"), body=$("#gate-body");
+  const MAX=60;
+  function render(i){
+    const g=GATE[i];
+    $$("button",tabs).forEach((b,j)=>b.setAttribute("aria-pressed",String(i===j)));
+    body.innerHTML=`<div class="variant">
+      <div class="txt">${esc(g.text)}</div>
+      <div><span class="p0k">P0 바뀐 글자 비율</span>
+        <div class="meter"><div class="seg ok"></div><div class="seg warn"></div><div class="seg abort"></div>
+          <div class="fill ${g.p0}" style="width:0%"></div><span class="cur" style="left:0%">${g.rate.toFixed(1)}%</span>
+          <span class="tick" style="left:0">0</span><span class="tick" style="left:50%">30% 경고</span><span class="tick" style="left:83.33%">50% 중단</span><span class="tick" style="left:100%">60</span>
+        </div></div>
+      <div class="axes">
+        <div class="axis"><span class="k">P1 목표 달성</span><span class="v">쉼표 사이 간격 z <b>+${g.zb.toFixed(2)}</b> → <b>+${g.za.toFixed(2)}</b> <span class="small">(목표 +1.0 이하)</span></span><span class="chip ${g.p1s}">${g.p1}</span></div>
+        <div class="axis"><span class="k">P2 전멸</span><span class="v">"A가 아니라 B" 꼴 ${g.anti}</span><span class="chip">검사 안 함</span></div>
+        <div class="axis"><span class="k">P3 golden</span><span class="v">없던 숫자, 각주, 인용문, '-하였-', 상투어, 말하듯 쓴 어미 이상 없음</span><span class="chip ok">${g.golden}</span></div>
+        <div class="axis"><span class="k">P4 손댄 문장</span><span class="v">${g.touch}</span><span class="chip">참고</span></div>
+        <div class="axis"><span class="k">P5 판단 세기</span><span class="v">${g.mod}</span><span class="chip ok">OK</span></div>
+      </div>
+      <div class="verdict"><span class="chip ${g.vs}" style="font-size:.84rem;padding:.3rem .7rem">판정: ${g.verdict}</span><span class="exit">종료 코드 ${g.exit}</span></div>
+      <p class="small" style="margin:.8rem 0 0">${esc(g.note)}</p>
+    </div>`;
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{ const f=$(".fill",body), c=$(".cur",body); const w=(g.rate/MAX*100); f.style.width=w+"%"; c.style.left=w+"%"; }));
+  }
+  GATE.forEach((g,i)=>{ const b=document.createElement("button"); b.type="button"; b.className="btn"; b.setAttribute("role","tab"); b.textContent=g.name; b.addEventListener("click",()=>render(i)); tabs.appendChild(b); });
+  render(0);
+})();
+
+/* ---------- 그림 10 ---------- */
+(function(){
+  const rows=[
+    {id:"C-8",l:"대칭 문장 \"A가 아니라 B\"",h:0.52,a:6.30,note:"AI 모델 3개, 조건 상관없이 가장 강한 신호"},
+    {id:"I-4",l:"요구 표현으로 끝나는 문단",h:1.64,a:6.07,note:"조건을 맞춰도 2.1배"},
+    {id:"E-2",l:"\"~한다\" 어미 쏠림",h:52.2,a:95.0,note:"통계적으로 뚜렷한 차이"},
+    {id:"F-5",l:"\"~적 N\" 추상어 연쇄",h:3.87,a:6.07,note:"방향은 같지만 차이가 작음"},
+    {id:"C-11/C-12",l:"쉼표가 많음",h:33.4,a:49.1,note:"KatFish 벤치마크와 같은 방향"},
+    {id:"E-1",l:"100자 넘는 긴 문장",h:91.3,a:8.1,note:"AI가 못 씀 · 문장 잇기로 고칠 수 있음"},
+    {id:"참고만",l:"따옴표 직접 인용",h:8.7,a:0.0,note:"없는 인용을 만들 수 없어 고치지 않음"}
+  ];
+  const LMIN=Math.log10(0.03), LMAX=Math.log10(30);
+  const pct=r=>((Math.log10(r)-LMIN)/(LMAX-LMIN)*100);
+  const one=pct(1);
+  const root=$("#ratio");
+  root.innerHTML=rows.map(r=>{
+    const ratio=r.a===0?0.03:r.a/r.h; const p=pct(ratio); const ai=ratio>=1;
+    const left=ai?one:p, w=Math.abs(p-one);
+    const label=r.a===0?"AI 0.0 (사람 8.7)":`${ratio>=1?ratio.toFixed(1)+"배":"1/"+(1/ratio).toFixed(0)}`;
+    const nleft=ai?`calc(${one+w}% + .4rem)`:`calc(${left}% - .4rem)`;
+    return `<div class="rrow"><div class="lab"><b>${r.id}</b>${esc(r.l)}<small>사람 ${r.h} · AI ${r.a} (문장 1,000개당) · ${esc(r.note)}</small></div>
+      <div class="rtrack" style="--one:${one}%"><i class="one"></i><div class="b ${ai?"ai":"hu"}" style="left:${left}%;width:${w}%"></div><span class="n" style="left:${nleft};${ai?"":"transform:translate(-100%,-50%)"}">${label}</span></div></div>`;
+  }).join("");
+  $("#raxis").innerHTML=[0.05,0.1,0.2,0.5,1,2,5,10,20].map(v=>`<span style="left:${pct(v)}%">${v===1?"1배 (같음)":(v<1?"1/"+Math.round(1/v):v+"배")}</span>`).join("");
+})();
+
+/* ---------- 그림 11 ---------- */
+(function(){
+  const FILES=[
+    {f:"01_input.txt",t:"py",c:"원문 (특수 문자 정리 뒤)",r:"lsh"},
+    {f:"00_sanitize.json",t:"py",c:"특수 문자를 지운 기록 (지운 것이 있을 때만)",r:"lsh"},
+    {f:"00_metrics.json",t:"py",c:"점수표 + route_hint",r:"lsh"},
+    {f:"01_input_with_metrics.txt",t:"py",c:"[진단문 →] 점수표 → 원문을 합친 입력 파일",r:"lsh"},
+    {f:"02_diagnosis.md",t:"llm",c:"가장 큰 문제 3~6개 (진단 AI)",r:"sh"},
+    {f:"01_chunk_NN_input_with_metrics.txt",t:"py",c:"조각 입력 (측정 프로그램이 2조각 이상 만들었을 때만)",r:"h"},
+    {f:"chunk_manifest.json",t:"py",c:"조각 경계와 파일 이름 목록",r:"h"},
+    {f:"02_chunk_NN_rewritten.txt",t:"llm",c:"조각별로 고친 글 (글 고치는 AI, 동시에 여러 개)",r:"h"},
+    {f:"03_reassembled.md",t:"py",c:"조각을 다시 붙인 글 (글자 수 대조 포함)",r:"h"},
+    {f:"final.md",t:"llm",c:"고친 글 + 끝의 <!-- HUMANIZE-SUMMARY --> 요약",r:"lsh"},
+    {f:"final_pre_finalize.md",t:"py",c:"마무리 AI가 손대기 전 백업",r:"h"},
+    {f:"09_finalize.json",t:"llm",c:"내용 15항목 + 자연스러움 판정 (마무리 AI)",r:"h"}
+  ];
+  const tabs=$("#file-tabs"), tree=$("#tree");
+  const routes=[["l","light"],["s","standard"],["h","heavy (조각 나누기 포함)"]];
+  function render(k){
+    $$("button",tabs).forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.r===k)));
+    tree.innerHTML=`<div>_workspace/2026-11-05-001-a3f9/</div>`+FILES.map(f=>`<div class="${f.r.includes(k)?"":"off"}">  ├─ <span class="${f.t}">${esc(f.f)}</span><span class="cm">${esc(f.c)}</span></div>`).join("");
+  }
+  routes.forEach(([k,l])=>{ const b=document.createElement("button"); b.type="button"; b.className="btn"; b.dataset.r=k; b.textContent=l; b.addEventListener("click",()=>render(k)); tabs.appendChild(b); });
+  render("s");
+})();
+
+/* ---------- 화면에 들어올 때 한 번 움직이는 그림 (멈춘 상태는 언제나 완성된 모습) ---------- */
+(function(){
+  if(reduce||!("IntersectionObserver" in window)) return;
+  const els=$$("[data-anim]");
+  const vh=window.innerHeight||800;
+  els.forEach(e=>{ if(e.getBoundingClientRect().top>vh*0.85) e.classList.add("pre"); });
+  const io=new IntersectionObserver(es=>{ es.forEach(x=>{ if(x.isIntersecting){ x.target.classList.remove("pre"); io.unobserve(x.target); } }); },{threshold:.2});
+  els.forEach(e=>io.observe(e));
+})();
+})();
+</script>
+</body>
+</html>
