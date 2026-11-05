@@ -103,6 +103,8 @@ gemini extensions install https://github.com/epoko77-ai/im-not-ai.git
 - 이번 개선의 핵심 가치: **잘 쓴 글은 1콜로 싸게 끝납니다.** 어휘 티 없는 글에 최중량 파이프라인을 돌리던 낭비를 route_hint가 차단합니다.
 - `verify_change_rate.py`는 기존 연동을 위한 하위 호환 도구로 보존하며, 최종 판정의 SSOT는 `verify_gates.py`입니다.
 
+> **동작 원리 시각화**: 예시 문단 하나가 shim → 진단 → 윤문 → 게이트를 지나는 과정을 애니메이션으로 보여주는 단일 HTML 페이지가 [`docs/how-it-works.html`](docs/how-it-works.html)에 있습니다. 브라우저에서 파일을 직접 열면 됩니다.
+
 ## 에이전트 구성
 
 윤문 런타임 역할 3개와 별도 유지보수 역할 1개가 있습니다.
